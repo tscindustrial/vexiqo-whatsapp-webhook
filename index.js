@@ -1,6 +1,13 @@
 import express from "express";
-import { getOrCreateCompany, upsertLead, getOrCreateConversation, saveMessage } from "./src/crm.js";
-
+import {
+  getOrCreateCompany,
+  upsertLead,
+  getOrCreateConversation,
+  saveMessage,
+  setLeadName,
+  setConversationState
+} from "./src/crm.js";
+import { decideNextReply } from "./src/flow.js";
 const app = express();
 app.use(express.json());
 
@@ -84,8 +91,20 @@ app.post("/webhooks/whatsapp", async (req, res) => {
       rawPayload: req.body
     });
 
-    // 4) Respuesta simple tipo “echo”
-    const reply = `VEXIQO ✅ Recibí: "${text}"`;
+   // 4) Motor conversacional (solo nombre + siguiente pregunta)
+const decision = decideNextReply({
+  leadName: lead.name,
+  incomingText: text,
+  conversationState: convo.state
+});
+
+if (decision.action === "SAVE_NAME_AND_ADVANCE") {
+  await setLeadName(lead.id, decision.name);
+}
+
+await setConversationState(convo.id, decision.nextState);
+
+const reply = decision.reply;
 
     // 5) Guarda mensaje outbound
     await saveMessage({
