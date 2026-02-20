@@ -94,6 +94,11 @@ model Qualification {
 
   heightMeters Float?
   heightFeet   Int?
+  liftType     String?  // "BRAZO" | "TIJERA"
+  activity     String?  // "PINTURA" | "GENERAL"
+  terrain      String?  // "PISO_FIRME" | "TERRACERIA"
+  city         String?
+  durationDays Int?
 
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
