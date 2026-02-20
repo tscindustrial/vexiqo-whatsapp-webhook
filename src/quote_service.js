@@ -1,38 +1,36 @@
 /**
- * src/quote_service.js
- * Single entry-point to:
- *  - compute pricing (exact + 7/30 refs)
- *  - generate PDF buffer (Playwright)
- *  - persist QuoteRequest + QuoteItems (DRAFT) in Postgres via Prisma
- *
- * NOTE:
- *  - This does NOT send email yet.
- *  - This does NOT change state to SENT yet.
+ * src/quote_service.js  (ESM)
+ * Creates:
+ *  - pricing options (exact + refs)
+ *  - PDF buffer (Playwright)
+ *  - QuoteRequest + QuoteItems (DRAFT) via Prisma
  */
 
-const { PrismaClient } = require("@prisma/client");
-const { computeComparativeOptions } = require("./pricing_engine_v2");
-const { generateQuotePdfBuffer } = require("./pdf_quote");
+import { PrismaClient } from "@prisma/client";
+
+// These modules were created as CommonJS (module.exports).
+// In ESM, import them as default and destructure.
+import pricingEngine from "./pricing_engine_v2.js";
+import pdfQuote from "./pdf_quote.js";
+
+const { computeComparativeOptions } = pricingEngine;
+const { generateQuotePdfBuffer } = pdfQuote;
 
 const prisma = new PrismaClient();
 
 /**
- * Minimal quote creation for procurement-friendly flow:
- * - Primary column = exact requested duration
- * - References = 7 and 30 (or 1 day fallback)
- *
  * @param {Object} input
  * @param {string} input.companyId
- * @param {Object} input.lead              // lead payload from extractor/state machine
+ * @param {Object} input.lead              // { name?, phone?, email?, city? }
  * @param {number} input.durationDays      // exact requested days
- * @param {string} input.transportZone
- * @param {number} input.transportRoundTripMx
- * @param {Object} input.equipment         // { type, height_m, terrain, activity, equipmentModel }
- * @param {Object=} input.meta             // snapshot: extractor output, conversation ids, etc
+ * @param {string=} input.transportZone
+ * @param {number=} input.transportRoundTripMx
+ * @param {Object=} input.equipment         // { type, height_m, terrain, activity, equipmentModel }
+ * @param {Object=} input.meta              // snapshot: extractor output, conversation ids, etc
  *
- * @returns {Promise<{quoteId: string, quoteNumber: string, pdfBuffer: Buffer, filename: string, options: any[]}>}
+ * @returns {Promise<{quoteId:string, quoteNumber:string, pdfBuffer:Buffer, filename:string, options:any[]}>}
  */
-async function createDraftQuoteWithPdf(input) {
+export async function createDraftQuoteWithPdf(input) {
   const {
     companyId,
     lead,
@@ -45,25 +43,26 @@ async function createDraftQuoteWithPdf(input) {
 
   if (!companyId) throw new Error("createDraftQuoteWithPdf: companyId is required");
   if (!lead) throw new Error("createDraftQuoteWithPdf: lead is required");
-  if (!Number.isFinite(Number(durationDays)) || Number(durationDays) <= 0) {
+
+  const d = Number(durationDays);
+  if (!Number.isFinite(d) || d <= 0) {
     throw new Error(`createDraftQuoteWithPdf: durationDays invalid: ${durationDays}`);
   }
 
-  const equipmentModel = (equipment && equipment.equipmentModel) ? equipment.equipmentModel : "45FT";
+  const equipmentModel = equipment?.equipmentModel || "45FT";
 
-  // 1) Upsert Lead (by phone/email scoped to company)
+  // 1) Upsert Lead (scoped to company)
   const leadRecord = await upsertLead(companyId, lead);
 
-  // 2) Compute pricing: exact + refs
+  // 2) Compute pricing options: [primary exact, ref 7, ref 30] (or fallback 1D)
   const { options } = computeComparativeOptions({
-    durationDays: Number(durationDays),
+    durationDays: d,
     equipmentModel,
     transportRoundTripMx: Number(transportRoundTripMx || 0),
     vatRate: 0.16,
   });
 
-  // 3) Generate a quoteNumber sequential per company (simple, safe enough for now)
-  // If you expect high concurrency, we’ll move this to a DB sequence later.
+  // 3) Quote number (simple sequential per company)
   const quoteNumber = await nextQuoteNumber(companyId);
 
   // 4) Persist QuoteRequest + QuoteItems as DRAFT
@@ -79,13 +78,11 @@ async function createDraftQuoteWithPdf(input) {
       transportZone: transportZone || null,
       transportRoundTripMx: Number(transportRoundTripMx || 0),
 
-      // Store ONLY the exact requested totals as canonical fields for procurement
-      // (options[0] is primary exact request by our contract)
+      // Canonical totals = EXACT requested duration (options[0])
       subtotalMx: options[0]?.subtotalMx ?? 0,
       vatMx: options[0]?.vatMx ?? 0,
       totalMx: options[0]?.totalMx ?? 0,
 
-      // Snapshot
       meta: meta || null,
 
       items: {
@@ -126,7 +123,7 @@ async function createDraftQuoteWithPdf(input) {
       activity: equipment?.activity,
     },
     options,
-    requestedDays: Number(durationDays),
+    requestedDays: d,
     terms: [
       "Importe principal corresponde exactamente a la duración solicitada.",
       "Precios sin IVA + IVA 16% por separado.",
@@ -134,9 +131,6 @@ async function createDraftQuoteWithPdf(input) {
       "Vigencia: 48 horas.",
     ],
   });
-
-  // (Optional for next step): store pdfKey after uploading to storage
-  // For now we return buffer so webhook/email can attach it immediately.
 
   return {
     quoteId: quote.id,
@@ -147,15 +141,10 @@ async function createDraftQuoteWithPdf(input) {
   };
 }
 
-/**
- * Upsert lead by (companyId + phone) if available else by (companyId + email) if available.
- * If neither exists, creates a new record.
- */
 async function upsertLead(companyId, lead) {
   const phone = lead.phone ? String(lead.phone) : null;
   const email = lead.email ? String(lead.email).toLowerCase() : null;
 
-  // Prefer phone if present
   if (phone) {
     const existing = await prisma.lead.findFirst({ where: { companyId, phone } });
     if (existing) {
@@ -179,7 +168,6 @@ async function upsertLead(companyId, lead) {
     });
   }
 
-  // Fallback to email
   if (email) {
     const existing = await prisma.lead.findFirst({ where: { companyId, email } });
     if (existing) {
@@ -203,7 +191,6 @@ async function upsertLead(companyId, lead) {
     });
   }
 
-  // No phone/email: create anyway (WhatsApp flow usually has phone; if not, we handle later)
   return prisma.lead.create({
     data: {
       companyId,
@@ -215,18 +202,9 @@ async function upsertLead(companyId, lead) {
   });
 }
 
-/**
- * Simple sequential quote number per company.
- * For now: Q-YYYY-000001 style, based on count.
- * If you have multiple concurrent quotes, we’ll upgrade to an atomic sequence.
- */
 async function nextQuoteNumber(companyId) {
   const year = new Date().getFullYear();
   const count = await prisma.quoteRequest.count({ where: { companyId } });
   const seq = String(count + 1).padStart(6, "0");
   return `Q-${year}-${seq}`;
 }
-
-module.exports = {
-  createDraftQuoteWithPdf,
-};
