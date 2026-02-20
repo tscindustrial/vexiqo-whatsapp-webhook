@@ -1,4 +1,6 @@
 import express from "express";
+import { extractLeadFields } from "./src/ai_extractor.js";
+
 
 import {
   getOrCreateCompany,
@@ -87,18 +89,24 @@ app.post("/webhooks/whatsapp", async (req, res) => {
     const lead = await upsertLead(company.id, from);
     const convo = await getOrCreateConversation(company.id, lead.id);
 
-    // 2.1 Asegura Qualification (una por lead)
-    await getOrCreateQualification(company.id, lead.id);
+ // 🔹 AQUÍ VA EL BLOQUE NUEVO 🔹
+let extracted = null;
+try {
+  extracted = await extractLeadFields({
+    text,
+    known: { name: lead.name }
+  });
+  console.log("AI extracted:", extracted);
+} catch (e) {
+  console.log("AI extractor error:", e);
+}
 
-    // 3) Guarda mensaje inbound
-    await saveMessage({
-      companyId: company.id,
-      conversationId: convo.id,
-      direction: "INBOUND",
-      body: text,
-      waMessageId: msg.id,
-      rawPayload: req.body
-    });
+// Si no tenemos nombre guardado y la IA detectó uno → guardarlo
+if (!lead.name && extracted?.name) {
+  await setLeadName(lead.id, extracted.name);
+  lead.name = extracted.name; // actualizar variable local
+}
+// 🔹 FIN BLOQUE NUEVO 🔹
 
     // 4) Motor conversacional (nombre primero)
     const decision = decideNextReply({
