@@ -1,5 +1,6 @@
 import express from "express";
 import { extractLeadFields } from "./src/ai_extractor.js";
+import { updateQualificationFromExtract } from "./src/crm.js";
 
 
 import {
@@ -97,6 +98,16 @@ try {
     known: { name: lead.name }
   });
   console.log("AI extracted:", extracted);
+  // Guardar nombre si venía en el extract y no estaba guardado
+if (!lead.name && extracted?.name) {
+  await setLeadName(lead.id, extracted.name);
+  lead.name = extracted.name;
+}
+
+// Guardar requisitos técnicos/comerciales en Qualification
+if (extracted) {
+  await updateQualificationFromExtract(lead.id, extracted);
+}
 } catch (e) {
   console.log("AI extractor error:", e);
 }
