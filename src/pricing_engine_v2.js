@@ -4,11 +4,17 @@
  *   - primary option: exact duration requested
  *   - reference options: 7 days and 30 days (or 1 day if duplicate)
  *
- * Designed for SaaS rentals (MXN) with VAT separated.
+ * 45 ft pricing rules (MXN, SIN IVA) per master doc:
+ * - 1–3 días:  $2,300 / día
+ * - 4–7 días:  $2,200 / día  (pero 7 días tiene precio fijo)
+ * - 8–14 días: $1,800 / día
+ * - 15–21 días:$1,500 / día
+ * - >21 días:  $1,050 / día
+ * - 7 días fijo:  $15,400
+ * - 30 días fijo: $31,500 (exacto)
  */
 
 function roundMx(n) {
-  // MXN integer rounding
   return Math.round(Number(n || 0));
 }
 
@@ -16,11 +22,6 @@ function computeVat(subtotalMx, vatRate) {
   return roundMx(subtotalMx * vatRate);
 }
 
-/**
- * 45 ft pricing rules (MXN)
- * - Escalado por día para duraciones "exactas" fuera de 7 y 30
- * - 7 y 30 tienen precio fijo (por tu especificación)
- */
 function rentalBase45ftMx(durationDays) {
   const d = Number(durationDays);
 
@@ -28,23 +29,22 @@ function rentalBase45ftMx(durationDays) {
     throw new Error(`Invalid durationDays: ${durationDays}`);
   }
 
-  // Fixed bundles
+  // Fixed bundles (override tiers)
   if (d === 7) return 15400;
   if (d === 30) return 31500;
 
-  // Tiered daily rates
+  // Tiered daily rates (per master doc)
   let ratePerDay;
   if (d >= 1 && d <= 3) ratePerDay = 2300;
-  else if (d >= 4 && d <= 6) ratePerDay = 2200;
-  else if (d >= 7 && d <= 13) ratePerDay = 1900;
-  else if (d >= 14 && d <= 29) ratePerDay = 1300;
-  else ratePerDay = 1050; // 30+
+  else if (d >= 4 && d <= 7) ratePerDay = 2200;
+  else if (d >= 8 && d <= 14) ratePerDay = 1800;
+  else if (d >= 15 && d <= 21) ratePerDay = 1500;
+  else ratePerDay = 1050; // >21
 
   return roundMx(d * ratePerDay);
 }
 
 /**
- * Main compute function
  * @param {Object} input
  * @param {number} input.durationDays - exact days requested by customer
  * @param {string} input.equipmentModel - e.g. "45FT" (for now we implement 45ft only)
@@ -67,11 +67,9 @@ function computeComparativeOptions(input) {
 
   const transportMx = roundMx(transportRoundTripMx || 0);
 
-  // ---- Equipment routing (extendable) ----
-  // For now: 45ft only.
+  // Equipment routing (extend later)
   const model = String(equipmentModel || "45FT").toUpperCase();
   if (model !== "45FT" && model !== "45" && model !== "45_PIES" && model !== "JLG45") {
-    // You can extend here with other models.
     throw new Error(`Unsupported equipmentModel for pricing_engine_v2: ${equipmentModel}`);
   }
 
@@ -94,15 +92,13 @@ function computeComparativeOptions(input) {
   // Primary = exact request
   const primary = makeOption(d);
 
-  // References: 7 and 30, but avoid duplicates.
-  const wantedRefs = [7, 30];
-
+  // References = 7 and 30, avoiding duplicates
   const refs = [];
-  for (const refDays of wantedRefs) {
+  for (const refDays of [7, 30]) {
     if (refDays !== d) refs.push(makeOption(refDays));
   }
 
-  // If duplicate happened (d is 7 or 30), fill 3rd column with 1 day (quick anchor)
+  // If requested is 7 or 30, fill with 1-day as third anchor
   if (refs.length < 2) {
     const fallback = 1;
     if (fallback !== d && !refs.some(r => r.durationDays === fallback)) {
@@ -110,14 +106,9 @@ function computeComparativeOptions(input) {
     }
   }
 
-  // Ensure we return exactly 3 options: [primary, ref1, ref2]
   const options = [primary, ...refs].slice(0, 3);
 
-  return {
-    options,
-    primary,
-    references: refs.slice(0, 2),
-  };
+  return { options, primary, references: refs.slice(0, 2) };
 }
 
 module.exports = {
