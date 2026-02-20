@@ -333,5 +333,23 @@ function buildQuoteDraftedReply({ leadName, quoteNumber, durationDays, totalExac
   return `${name}. ✅ Generé tu cotización *${quoteNumber}*.\n\n${totalTxt}\n${transportTxt}\n\n¿A qué *email* te la envío en PDF?`;
 }
 
+import { prisma } from "./src/db.js";
+
+(async () => {
+  try {
+    const c1 = await prisma.company.count();
+    console.log("Prisma OK. Company count =", c1);
+
+    // Esto nos dice si el cliente trae los modelos o no:
+    const qc = await prisma.quote.count();
+    const qic = await prisma.quoteItem.count();
+
+    console.log("Quote tables reachable. Quote count =", qc, "QuoteItem count =", qic);
+  } catch (e) {
+    console.log("Prisma model check error:", e?.message || e);
+  }
+})();
+
+
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Listening on ${port}`));
