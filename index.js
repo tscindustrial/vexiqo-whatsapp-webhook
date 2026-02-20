@@ -6,8 +6,11 @@ import {
   saveMessage,
   setLeadName,
   setConversationState
+  getOrCreateQualification,
+  updateQualificationHeight,
 } from "./src/crm.js";
 import { decideNextReply } from "./src/flow.js";
+import { parseHeight } from "./src/parse.js";
 const app = express();
 app.use(express.json());
 
@@ -80,6 +83,7 @@ app.post("/webhooks/whatsapp", async (req, res) => {
     const company = await getOrCreateCompany();
     const lead = await upsertLead(company.id, from);
     const convo = await getOrCreateConversation(company.id, lead.id);
+    await getOrCreateQualification(company.id, lead.id);
 
     // 3) Guarda mensaje inbound
     await saveMessage({
@@ -93,6 +97,13 @@ app.post("/webhooks/whatsapp", async (req, res) => {
 
    // 4) Motor conversacional (solo nombre + siguiente pregunta)
 const decision = decideNextReply({
+  // Si ya estamos en TECH_QUALIFICATION, intentamos parsear altura y guardarla
+if (decision.nextState === "TECH_QUALIFICATION") {
+  const { meters, feet } = parseHeight(text);
+  if (meters || feet) {
+    await updateQualificationHeight(lead.id, meters, feet);
+  }
+}
   leadName: lead.name,
   incomingText: text,
   conversationState: convo.state
