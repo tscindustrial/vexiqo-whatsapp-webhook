@@ -142,7 +142,34 @@ if (!lead.name && extracted?.name) {
     await setConversationState(convo.id, decision.nextState);
 
     // 7) Respuesta
-    const reply = decision.reply;
+    let reply = decision.reply;
+
+// Si la IA extrajo campos, preferimos preguntar lo faltante y NO hacer eco
+if (extracted) {
+  // Si aún falta nombre (no debería si extracted.name vino), pedimos nombre
+  if (!lead.name) {
+    reply = "Hola 👋 Soy VEXIQO de TSC Industrial. ¿Me compartes tu nombre para apoyarte mejor?";
+  } else if (extracted?.missing?.length) {
+    if (extracted.missing.includes("terrain")) {
+      reply = "Gracias. ¿El terreno es piso firme (concreto) o terracería?";
+    } else if (extracted.missing.includes("city")) {
+      reply = "¿En qué ciudad es el trabajo? (ej: Saltillo, Monterrey)";
+    } else if (extracted.missing.includes("duration_days")) {
+      reply = "¿Cuántos días necesitas el equipo?";
+    } else if (extracted.missing.includes("height_m")) {
+      reply = `Gracias, ${lead.name}. ¿Qué altura necesitas alcanzar? (ej: 14m o 45ft)`;
+    } else if (extracted.missing.includes("type")) {
+      reply = "¿Necesitas brazo articulado o tijera?";
+    } else if (extracted.missing.includes("activity")) {
+      reply = "¿El trabajo es de pintura o uso general?";
+    } else {
+      reply = "Perfecto. Para validar compatibilidad, ¿me confirmas terreno, ciudad y duración?";
+    }
+  } else {
+    reply = "Perfecto. Ya tengo lo necesario para validar compatibilidad. Dame un momento.";
+  }
+}
+
 
     // 8) Guarda mensaje outbound
     await saveMessage({
