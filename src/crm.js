@@ -60,3 +60,22 @@ export async function setConversationState(conversationId, state) {
     data: { state }
   });
 }
+export async function getOrCreateQualification(companyId, leadId) {
+  const existing = await prisma.qualification.findUnique({ where: { leadId } });
+  if (existing) return existing;
+
+  return prisma.qualification.create({
+    data: { companyId, leadId }
+  });
+}
+
+export async function updateQualificationHeight(leadId, heightMeters, heightFeet) {
+  return prisma.qualification.update({
+    where: { leadId },
+    data: {
+      heightMeters: heightMeters ?? null,
+      heightFeet: heightFeet ?? null
+    }
+  });
+}
+
