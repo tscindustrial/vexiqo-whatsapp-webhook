@@ -1,11 +1,11 @@
 /**
- * src/pdf_quote.js
+ * src/pdf_quote.js (ESM)
  * HTML -> PDF (Playwright) for Quote PDF 2.0 comparative:
  *   - Primary: exact request ("Tu solicitud (X días)")
  *   - References: "Semana (7 días)" and "Mes (30 días)" (or "1 día" as fallback)
  */
 
-const { chromium } = require("playwright");
+import { chromium } from "playwright";
 
 /**
  * Generate Quote PDF buffer (comparative).
@@ -19,7 +19,7 @@ const { chromium } = require("playwright");
  * @param {number=} input.requestedDays // exact days requested by customer (for labeling primary column)
  * @returns {Promise<{buffer: Buffer, filename: string}>}
  */
-async function generateQuotePdfBuffer(input) {
+export async function generateQuotePdfBuffer(input) {
   const company = input.company || {};
   const lead = input.lead || {};
   const quote = input.quote || {};
@@ -36,7 +36,6 @@ async function generateQuotePdfBuffer(input) {
       ];
 
   // Expect 3 options: [primaryExact, ref7, ref30] (or fallback 1D)
-  // Keep order as received, but ensure max 3.
   const cols = options.slice(0, 3);
 
   const html = buildHtml({ company, lead, quote, equipment, cols, terms, requestedDays });
@@ -76,14 +75,6 @@ function fmtDate(iso) {
   return d.toLocaleDateString("es-MX", { year: "numeric", month: "short", day: "2-digit" });
 }
 
-/**
- * Column label rules:
- * - First column: "Tu solicitud (X días)" where X = requestedDays
- * - If durationDays == 7 => "Semana (7 días)"
- * - If durationDays == 30 => "Mes (30 días)"
- * - If durationDays == 1 => "1 día"
- * - Else fallback: "${d} días"
- */
 function columnLabel(index, durationDays, requestedDays) {
   const d = Number(durationDays);
 
@@ -121,7 +112,6 @@ function buildHtml({ company, lead, quote, equipment, cols, terms, requestedDays
 
   const transportZone = quote.transportZone || "—";
 
-  // Always show 3 columns; if fewer, fill with zeros (avoids broken layout)
   const filledCols = [
     cols[0] || { durationDays: requestedDays || 0, rentalBaseMx: 0, transportMx: 0, subtotalMx: 0, vatMx: 0, totalMx: 0 },
     cols[1] || { durationDays: 7, rentalBaseMx: 0, transportMx: 0, subtotalMx: 0, vatMx: 0, totalMx: 0 },
@@ -360,7 +350,3 @@ function escapeHtml(s) {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
 }
-
-module.exports = {
-  generateQuotePdfBuffer,
-};
