@@ -212,7 +212,7 @@ app.post("/webhooks/whatsapp", async (req, res) => {
         });
 
         // Cambia estado conversacional para no duplicar
-        await setConversationState(convo.id, "QUOTE_DRAFTED");
+        await setConversationState(convo.id, "READY_FOR_MATCH");
 
         const totalExact = result.options?.[0]?.totalMx ?? null;
 
