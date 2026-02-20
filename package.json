@@ -16,7 +16,7 @@
   },
 "scripts": {
   "start": "npx prisma db push && node index.js",
-  "postinstall": "npx playwright install chromium"
+  "postinstall": "npx playwright install --with-deps chromium"
 }
   
 }
