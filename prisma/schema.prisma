@@ -29,6 +29,8 @@ model Company {
   leads         Lead[]
   conversations Conversation[]
   messages      Message[]
+  qualifications Qualification[]
+
 }
 
 model Lead {
@@ -45,6 +47,8 @@ model Lead {
   conversations Conversation[]
 
   @@unique([companyId, phoneE164])
+  qualification Qualification?
+
 }
 
 model Conversation {
@@ -79,3 +83,20 @@ model Message {
 
   @@index([companyId, conversationId, createdAt])
 }
+
+model Qualification {
+  id          String   @id @default(cuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id])
+
+  leadId      String   @unique
+  lead        Lead     @relation(fields: [leadId], references: [id])
+
+  heightMeters Float?
+  heightFeet   Int?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+
