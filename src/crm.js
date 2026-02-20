@@ -60,65 +60,67 @@ export async function setConversationState(conversationId, state) {
     data: { state }
   });
 }
+
 export async function getOrCreateQualification(companyId, leadId) {
   const existing = await prisma.qualification.findUnique({ where: { leadId } });
   if (existing) return existing;
 
+  // IMPORTANT: no strings vacíos, todo null
   return prisma.qualification.create({
-    data: { companyId, leadId }
-  });
-}
-
-export async function updateQualificationHeight(leadId, heightMeters, heightFeet) {
-  return prisma.qualification.update({
-    where: { leadId },
     data: {
-      heightMeters: heightMeters ?? null,
-      heightFeet: heightFeet ?? null
+      companyId,
+      leadId,
+      heightMeters: null,
+      heightFeet: null,
+      liftType: null,
+      activity: null,
+      terrain: null,
+      city: null,
+      durationDays: null
     }
   });
 }
-export async function updateQualificationFromExtract(leadId, extracted) {
+
+export async function getQualification(leadId) {
+  return prisma.qualification.findUnique({ where: { leadId } });
+}
+
+// --- Helpers ---
+function cleanStr(v) {
+  if (v == null) return null;
+  const s = String(v).trim();
+  return s.length ? s : null;
+}
+
+/**
+ * Patch acumulado: SOLO actualiza si hay valor real.
+ * Nunca escribe '' (string vacío).
+ * Nunca sobreescribe con null.
+ */
+export async function patchQualificationFromExtract(leadId, extracted) {
   const data = {};
 
-  if (extracted.height_m != null) data.heightMeters = extracted.height_m;
-  if (extracted.type) data.liftType = extracted.type;
-  if (extracted.activity) data.activity = extracted.activity;
-  if (extracted.terrain) data.terrain = extracted.terrain;
-  if (extracted.city) data.city = extracted.city;
-  if (extracted.duration_days != null) data.durationDays = extracted.duration_days;
+  if (extracted?.height_m != null) data.heightMeters = extracted.height_m;
+  if (extracted?.height_ft != null) data.heightFeet = extracted.height_ft;
 
-  // Si no hay nada que actualizar, evita query
+  const liftType = cleanStr(extracted?.type);
+  if (liftType) data.liftType = liftType;
+
+  const activity = cleanStr(extracted?.activity);
+  if (activity) data.activity = activity;
+
+  const terrain = cleanStr(extracted?.terrain);
+  if (terrain) data.terrain = terrain;
+
+  const city = cleanStr(extracted?.city);
+  if (city) data.city = city;
+
+  if (extracted?.duration_days != null) data.durationDays = extracted.duration_days;
+
   if (Object.keys(data).length === 0) return null;
 
   return prisma.qualification.update({
     where: { leadId },
     data
   });
-}
-export async function getQualification(leadId) {
-  return prisma.qualification.findUnique({ where: { leadId } });
-}
-export async function patchQualificationFromExtract(leadId, extracted) {
-// Construye data solo con valores NO null/undefined para no borrar lo ya capturado
-const data = {};
-
-if (extracted.height_m != null) data.heightMeters = extracted.height_m;
-if (extracted.height_ft != null) data.heightFeet = extracted.height_ft;
-
-if (extracted.type != null) data.liftType = extracted.type;
-if (extracted.activity != null) data.activity = extracted.activity;
-if (extracted.terrain != null) data.terrain = extracted.terrain;
-if (extracted.city != null) data.city = extracted.city;
-if (extracted.duration_days != null) data.durationDays = extracted.duration_days;
-
-// Si no hay nada que actualizar, salte
-if (Object.keys(data).length === 0) return;
-
-await prisma.qualification.update({
-  where: { leadId },
-  data
-});
-  
-  
 }
