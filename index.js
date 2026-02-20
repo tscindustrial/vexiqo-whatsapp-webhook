@@ -162,14 +162,15 @@ app.post("/webhooks/whatsapp", async (req, res) => {
 
     // 5) Leer acumulado desde BD y calcular faltantes DESDE LO ACUMULADO
     const q = await getQualification(lead.id);
+    console.log("Qualification from DB:", q);
 
     const missing = [];
-    if (!q?.heightMeters) missing.push("height_m");
-    if (!q?.liftType) missing.push("type");
-    if (!q?.activity) missing.push("activity");
-    if (!q?.terrain) missing.push("terrain");
-    if (!q?.city) missing.push("city");
-    if (!q?.durationDays) missing.push("duration_days");
+    if (!q || q.heightMeters == null) missing.push("height_m");
+    if (!q || !q.liftType) missing.push("type");
+    if (!q || !q.activity) missing.push("activity");
+    if (!q || !q.terrain) missing.push("terrain");
+    if (!q || !q.city) missing.push("city");
+    if (!q || q.durationDays == null) missing.push("duration_days");
 
     // 6) Definir estado conversacional
     const nextState = missing.length > 0 ? "TECH_QUALIFICATION" : "READY_FOR_MATCH";
