@@ -14,8 +14,7 @@ import {
 } from "./src/crm.js";
 
 import { createDraftQuoteWithPdf } from "./src/quote_service.js";
-import { prisma } from "./src/db.js";
-console.log("Prisma models:", Object.keys(prisma._dmmf.datamodel.models).map(m => m.name));
+
 
 const app = express();
 app.use(express.json());
