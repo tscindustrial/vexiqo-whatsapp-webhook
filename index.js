@@ -196,7 +196,7 @@ app.post("/webhooks/whatsapp", async (req, res) => {
           companyId: company.id,
           lead: {
             name: lead.name || null,
-            phone: from,
+            phoneE164: from,
             email: lead.email || null,
             city: q.city || null
           },
