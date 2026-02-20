@@ -45,4 +45,22 @@ export async function saveMessage({ companyId, conversationId, direction, body, 
     where: { id: conversationId },
     data: { lastMessageAt: new Date() }
   });
+
+export async function setLeadName(leadId, name) {
+  return prisma.lead.update({
+    where: { id: leadId },
+    data: { name }
+  });
+}
+
+export async function setConversationState(conversationId, state) {
+  return prisma.conversation.update({
+    where: { id: conversationId },
+    data: { state }
+  });
+}
+
+
+
+  
 }
