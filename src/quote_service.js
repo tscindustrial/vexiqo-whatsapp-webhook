@@ -1,9 +1,6 @@
 /**
  * src/quote_service.js (ESM)
- * Creates:
- *  - pricing options (exact + refs)
- *  - PDF buffer (Playwright)
- *  - QuoteRequest + QuoteItems (DRAFT) via Prisma
+ * Persiste Quote (DRAFT) + QuoteItem(s) y genera PDF buffer (Playwright).
  */
 
 import { PrismaClient } from "@prisma/client";
@@ -33,10 +30,10 @@ export async function createDraftQuoteWithPdf(input) {
 
   const equipmentModel = equipment?.equipmentModel || "45FT";
 
-  // 1) Upsert Lead (scoped to company)
+  // 1) Upsert Lead (Lead solo tiene phoneE164 + name)
   const leadRecord = await upsertLead(companyId, lead);
 
-  // 2) Pricing options
+  // 2) Pricing options: [primary exact, ref 7, ref 30] (o fallback)
   const { options } = computeComparativeOptions({
     durationDays: d,
     equipmentModel,
@@ -44,13 +41,13 @@ export async function createDraftQuoteWithPdf(input) {
     vatRate: 0.16,
   });
 
-  // 3) Quote number
+  // 3) Quote number secuencial por company
   const quoteNumber = await nextQuoteNumber(companyId);
 
-  // 4) Persist QuoteRequest + QuoteItems as DRAFT
+  // 4) Persist Quote + QuoteItems as DRAFT
   const createdAtISO = new Date().toISOString();
 
-  const quote = await prisma.quoteRequest.create({
+  const quote = await prisma.quote.create({
     data: {
       companyId,
       leadId: leadRecord.id,
@@ -91,7 +88,12 @@ export async function createDraftQuoteWithPdf(input) {
 
   const { buffer: pdfBuffer, filename } = await generateQuotePdfBuffer({
     company: company || {},
-    lead: leadRecord,
+    lead: {
+      name: leadRecord.name || null,
+      phone: leadRecord.phoneE164 || null, // para mostrarlo en PDF como "WhatsApp"
+      email: null,
+      city: null,
+    },
     quote: {
       quoteNumber: quote.quoteNumber,
       createdAtISO,
@@ -123,52 +125,17 @@ export async function createDraftQuoteWithPdf(input) {
 }
 
 async function upsertLead(companyId, lead) {
-  // ✅ Prisma field name confirmed: phoneE164
   const phoneE164 = lead.phoneE164 ? String(lead.phoneE164) : null;
-  const email = lead.email ? String(lead.email).toLowerCase() : null;
+  if (!phoneE164) throw new Error("upsertLead: lead.phoneE164 is required (WhatsApp sender)");
 
-  if (phoneE164) {
-    const existing = await prisma.lead.findFirst({ where: { companyId, phoneE164 } });
+  const existing = await prisma.lead.findFirst({ where: { companyId, phoneE164 } });
 
-    if (existing) {
-      return prisma.lead.update({
-        where: { id: existing.id },
-        data: {
-          name: lead.name || existing.name,
-          email: email || existing.email,
-        },
-      });
-    }
-
-    return prisma.lead.create({
+  if (existing) {
+    // Lead schema solo permite actualizar name
+    return prisma.lead.update({
+      where: { id: existing.id },
       data: {
-        companyId,
-        name: lead.name || null,
-        phoneE164,
-        email,
-      },
-    });
-  }
-
-  if (email) {
-    const existing = await prisma.lead.findFirst({ where: { companyId, email } });
-
-    if (existing) {
-      return prisma.lead.update({
-        where: { id: existing.id },
-        data: {
-          name: lead.name || existing.name,
-          phoneE164: existing.phoneE164,
-        },
-      });
-    }
-
-    return prisma.lead.create({
-      data: {
-        companyId,
-        name: lead.name || null,
-        phoneE164: null,
-        email,
+        name: lead.name || existing.name,
       },
     });
   }
@@ -176,16 +143,15 @@ async function upsertLead(companyId, lead) {
   return prisma.lead.create({
     data: {
       companyId,
+      phoneE164,
       name: lead.name || null,
-      phoneE164: null,
-      email: null,
     },
   });
 }
 
 async function nextQuoteNumber(companyId) {
   const year = new Date().getFullYear();
-  const count = await prisma.quoteRequest.count({ where: { companyId } });
+  const count = await prisma.quote.count({ where: { companyId } });
   const seq = String(count + 1).padStart(6, "0");
   return `Q-${year}-${seq}`;
 }
