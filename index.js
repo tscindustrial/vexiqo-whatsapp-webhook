@@ -1,16 +1,19 @@
 import express from "express";
+
 import {
   getOrCreateCompany,
   upsertLead,
   getOrCreateConversation,
   saveMessage,
   setLeadName,
-  setConversationState
+  setConversationState,
   getOrCreateQualification,
-  updateQualificationHeight,
+  updateQualificationHeight
 } from "./src/crm.js";
+
 import { decideNextReply } from "./src/flow.js";
 import { parseHeight } from "./src/parse.js";
+
 const app = express();
 app.use(express.json());
 
@@ -83,6 +86,8 @@ app.post("/webhooks/whatsapp", async (req, res) => {
     const company = await getOrCreateCompany();
     const lead = await upsertLead(company.id, from);
     const convo = await getOrCreateConversation(company.id, lead.id);
+
+    // 2.1 Asegura Qualification (una por lead)
     await getOrCreateQualification(company.id, lead.id);
 
     // 3) Guarda mensaje inbound
@@ -95,29 +100,32 @@ app.post("/webhooks/whatsapp", async (req, res) => {
       rawPayload: req.body
     });
 
-   // 4) Motor conversacional (solo nombre + siguiente pregunta)
-const decision = decideNextReply({
-  // Si ya estamos en TECH_QUALIFICATION, intentamos parsear altura y guardarla
-if (decision.nextState === "TECH_QUALIFICATION") {
-  const { meters, feet } = parseHeight(text);
-  if (meters || feet) {
-    await updateQualificationHeight(lead.id, meters, feet);
-  }
-}
-  leadName: lead.name,
-  incomingText: text,
-  conversationState: convo.state
-});
+    // 4) Motor conversacional (nombre primero)
+    const decision = decideNextReply({
+      leadName: lead.name,
+      incomingText: text,
+      conversationState: convo.state
+    });
 
-if (decision.action === "SAVE_NAME_AND_ADVANCE") {
-  await setLeadName(lead.id, decision.name);
-}
+    if (decision.action === "SAVE_NAME_AND_ADVANCE") {
+      await setLeadName(lead.id, decision.name);
+    }
 
-await setConversationState(convo.id, decision.nextState);
+    // 5) Si estamos en calificación técnica, intentamos parsear altura y guardarla
+    if (decision.nextState === "TECH_QUALIFICATION") {
+      const { meters, feet } = parseHeight(text);
+      if (meters || feet) {
+        await updateQualificationHeight(lead.id, meters, feet);
+      }
+    }
 
-const reply = decision.reply;
+    // 6) Persistir estado
+    await setConversationState(convo.id, decision.nextState);
 
-    // 5) Guarda mensaje outbound
+    // 7) Respuesta
+    const reply = decision.reply;
+
+    // 8) Guarda mensaje outbound
     await saveMessage({
       companyId: company.id,
       conversationId: convo.id,
@@ -127,7 +135,7 @@ const reply = decision.reply;
       rawPayload: null
     });
 
-    // 6) Envía WhatsApp
+    // 9) Envía WhatsApp
     await sendWhatsAppText(from, reply);
   } catch (e) {
     console.log("Webhook error:", e);
@@ -136,4 +144,3 @@ const reply = decision.reply;
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Listening on ${port}`));
-
