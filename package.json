@@ -13,6 +13,11 @@
     "openai": "^4.0.0",
     "prisma": "^6.0.0",
     "playwright": "^1.42.0"
-  }
+  },
+"scripts": {
+  "start": "npx prisma db push && node index.js",
+  "postinstall": "npx playwright install chromium"
+}
+  
 }
 
