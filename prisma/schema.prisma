@@ -19,6 +19,13 @@ enum MessageDirection {
   OUTBOUND
 }
 
+enum QuoteStatus {
+  DRAFT
+  SENT
+  WON
+  LOST
+}
+
 model Company {
   id                String   @id @default(cuid())
   name              String   @unique
@@ -31,6 +38,7 @@ model Company {
   conversations Conversation[]
   messages      Message[]
   qualifications Qualification[]
+  quotes Quote[]
 
 }
 
@@ -49,6 +57,7 @@ model Lead {
 
   @@unique([companyId, phoneE164])
   qualification Qualification?
+  quotes Quote[]
 
 }
 
@@ -103,6 +112,53 @@ model Qualification {
 
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+}
+
+model Quote {
+  id          String     @id @default(cuid())
+  companyId   String
+  company     Company    @relation(fields: [companyId], references: [id])
+
+  leadId      String
+  lead        Lead       @relation(fields: [leadId], references: [id])
+
+  status      QuoteStatus @default(DRAFT)
+  quoteNumber String
+
+  // Snapshot comercial
+  transportZone        String?
+  transportRoundTripMx Int      @default(0)
+
+  // Totales del escenario principal (duración solicitada)
+  subtotalMx Int @default(0)
+  vatMx      Int @default(0)
+  totalMx    Int @default(0)
+
+  meta Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items QuoteItem[]
+
+  @@index([companyId, createdAt])
+  @@unique([companyId, quoteNumber])
+}
+
+model QuoteItem {
+  id        String  @id @default(cuid())
+  quoteId   String
+  quote     Quote   @relation(fields: [quoteId], references: [id])
+
+  lineNo     Int
+  description String
+  durationDays Int
+  unitPriceMx  Int
+  amountMx     Int
+
+  createdAt DateTime @default(now())
+
+  @@index([quoteId, lineNo])
 }
 
 
