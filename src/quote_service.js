@@ -7,14 +7,11 @@
  */
 
 import { PrismaClient } from "@prisma/client";
+import { generateQuotePdfBuffer } from "./pdf_quote.js";
 
-// These modules were created as CommonJS (module.exports).
-// In ESM, import them as default and destructure.
+// pricing_engine_v2 is still CommonJS (module.exports). Import default and destructure.
 import pricingEngine from "./pricing_engine_v2.js";
-import pdfQuote from "./pdf_quote.js";
-
 const { computeComparativeOptions } = pricingEngine;
-const { generateQuotePdfBuffer } = pdfQuote;
 
 const prisma = new PrismaClient();
 
