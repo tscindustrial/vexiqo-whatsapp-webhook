@@ -12,18 +12,6 @@ import { generateQuotePdfBuffer } from "./pdf_quote.js";
 
 const prisma = new PrismaClient();
 
-/**
- * @param {Object} input
- * @param {string} input.companyId
- * @param {Object} input.lead              // { name?, phone?, email?, city? }
- * @param {number} input.durationDays      // exact requested days
- * @param {string=} input.transportZone
- * @param {number=} input.transportRoundTripMx
- * @param {Object=} input.equipment         // { type, height_m, terrain, activity, equipmentModel }
- * @param {Object=} input.meta              // snapshot: extractor output, conversation ids, etc
- *
- * @returns {Promise<{quoteId:string, quoteNumber:string, pdfBuffer:Buffer, filename:string, options:any[]}>}
- */
 export async function createDraftQuoteWithPdf(input) {
   const {
     companyId,
@@ -48,7 +36,7 @@ export async function createDraftQuoteWithPdf(input) {
   // 1) Upsert Lead (scoped to company)
   const leadRecord = await upsertLead(companyId, lead);
 
-  // 2) Pricing options: [primary exact, ref 7, ref 30] (or fallback 1D)
+  // 2) Pricing options
   const { options } = computeComparativeOptions({
     durationDays: d,
     equipmentModel,
@@ -56,7 +44,7 @@ export async function createDraftQuoteWithPdf(input) {
     vatRate: 0.16,
   });
 
-  // 3) Quote number (simple sequential per company)
+  // 3) Quote number
   const quoteNumber = await nextQuoteNumber(companyId);
 
   // 4) Persist QuoteRequest + QuoteItems as DRAFT
@@ -72,7 +60,6 @@ export async function createDraftQuoteWithPdf(input) {
       transportZone: transportZone || null,
       transportRoundTripMx: Number(transportRoundTripMx || 0),
 
-      // Canonical totals = EXACT requested duration (options[0])
       subtotalMx: options[0]?.subtotalMx ?? 0,
       vatMx: options[0]?.vatMx ?? 0,
       totalMx: options[0]?.totalMx ?? 0,
@@ -136,11 +123,13 @@ export async function createDraftQuoteWithPdf(input) {
 }
 
 async function upsertLead(companyId, lead) {
-  const phone = lead.phone ? String(lead.phone) : null;
+  // ✅ Prisma field name confirmed: phoneE164
+  const phoneE164 = lead.phoneE164 ? String(lead.phoneE164) : null;
   const email = lead.email ? String(lead.email).toLowerCase() : null;
 
-  if (phone) {
-    const existing = await prisma.lead.findFirst({ where: { companyId, phone } });
+  if (phoneE164) {
+    const existing = await prisma.lead.findFirst({ where: { companyId, phoneE164 } });
+
     if (existing) {
       return prisma.lead.update({
         where: { id: existing.id },
@@ -151,11 +140,12 @@ async function upsertLead(companyId, lead) {
         },
       });
     }
+
     return prisma.lead.create({
       data: {
         companyId,
         name: lead.name || null,
-        phone,
+        phoneE164,
         email,
         city: lead.city || null,
       },
@@ -164,21 +154,23 @@ async function upsertLead(companyId, lead) {
 
   if (email) {
     const existing = await prisma.lead.findFirst({ where: { companyId, email } });
+
     if (existing) {
       return prisma.lead.update({
         where: { id: existing.id },
         data: {
           name: lead.name || existing.name,
-          phone: phone || existing.phone,
+          phoneE164: existing.phoneE164,
           city: lead.city || existing.city,
         },
       });
     }
+
     return prisma.lead.create({
       data: {
         companyId,
         name: lead.name || null,
-        phone,
+        phoneE164: null,
         email,
         city: lead.city || null,
       },
@@ -189,7 +181,7 @@ async function upsertLead(companyId, lead) {
     data: {
       companyId,
       name: lead.name || null,
-      phone: null,
+      phoneE164: null,
       email: null,
       city: lead.city || null,
     },
