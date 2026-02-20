@@ -100,19 +100,25 @@ export async function getQualification(leadId) {
   return prisma.qualification.findUnique({ where: { leadId } });
 }
 export async function patchQualificationFromExtract(leadId, extracted) {
-  const data = {};
+// Construye data solo con valores NO null/undefined para no borrar lo ya capturado
+const data = {};
 
-  if (extracted.height_m != null) data.heightMeters = extracted.height_m;
-  if (extracted.type) data.liftType = extracted.type;
-  if (extracted.activity) data.activity = extracted.activity;
-  if (extracted.terrain) data.terrain = extracted.terrain;
-  if (extracted.city) data.city = extracted.city;
-  if (extracted.duration_days != null) data.durationDays = extracted.duration_days;
+if (extracted.height_m != null) data.heightMeters = extracted.height_m;
+if (extracted.height_ft != null) data.heightFeet = extracted.height_ft;
 
-  if (Object.keys(data).length === 0) return null;
+if (extracted.type != null) data.liftType = extracted.type;
+if (extracted.activity != null) data.activity = extracted.activity;
+if (extracted.terrain != null) data.terrain = extracted.terrain;
+if (extracted.city != null) data.city = extracted.city;
+if (extracted.duration_days != null) data.durationDays = extracted.duration_days;
 
-  return prisma.qualification.update({
-    where: { leadId },
-    data
-  });
+// Si no hay nada que actualizar, salte
+if (Object.keys(data).length === 0) return;
+
+await prisma.qualification.update({
+  where: { leadId },
+  data
+});
+  
+  
 }
