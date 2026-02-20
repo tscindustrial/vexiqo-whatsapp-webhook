@@ -136,7 +136,6 @@ async function upsertLead(companyId, lead) {
         data: {
           name: lead.name || existing.name,
           email: email || existing.email,
-          city: lead.city || existing.city,
         },
       });
     }
@@ -147,7 +146,6 @@ async function upsertLead(companyId, lead) {
         name: lead.name || null,
         phoneE164,
         email,
-        city: lead.city || null,
       },
     });
   }
@@ -161,7 +159,6 @@ async function upsertLead(companyId, lead) {
         data: {
           name: lead.name || existing.name,
           phoneE164: existing.phoneE164,
-          city: lead.city || existing.city,
         },
       });
     }
@@ -172,7 +169,6 @@ async function upsertLead(companyId, lead) {
         name: lead.name || null,
         phoneE164: null,
         email,
-        city: lead.city || null,
       },
     });
   }
@@ -183,7 +179,6 @@ async function upsertLead(companyId, lead) {
       name: lead.name || null,
       phoneE164: null,
       email: null,
-      city: lead.city || null,
     },
   });
 }
