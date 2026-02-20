@@ -13,6 +13,8 @@ import {
   patchQualificationFromExtract
 } from "./src/crm.js";
 
+import { createDraftQuoteWithPdf } from "./src/quote_service.js";
+
 const app = express();
 app.use(express.json());
 
@@ -65,7 +67,7 @@ function buildNextQuestion({ leadName, missing }) {
   }
 
   if (!missing || missing.length === 0) {
-    return "Perfecto. Ya tengo lo necesario para validar compatibilidad. Dame un momento.";
+    return "Perfecto. Ya tengo lo necesario para generar tu cotización. Dame un momento.";
   }
 
   const next = missing[0];
@@ -141,7 +143,6 @@ app.post("/webhooks/whatsapp", async (req, res) => {
         text,
         known: {
           name: lead.name || null
-          // si luego quieres, aquí metemos known con datos de qualification también
         }
       });
       console.log("AI extracted:", extracted);
@@ -170,12 +171,91 @@ app.post("/webhooks/whatsapp", async (req, res) => {
     if (!q?.city) missing.push("city");
     if (!q?.durationDays) missing.push("duration_days");
 
-    // 6) Definir estado conversacional (simple por ahora)
-    // Si falta algo, seguimos calificando. Si no falta, listo para motor determinístico.
+    // 6) Definir estado conversacional
     const nextState = missing.length > 0 ? "TECH_QUALIFICATION" : "READY_FOR_MATCH";
+
+    // ✅ 6.1) Si ya está todo, generamos cotización (1 paso, sin email todavía)
+    if (nextState === "READY_FOR_MATCH") {
+      // Evita generar varias veces si el usuario manda otro mensaje con todo completo
+      const currentState = convo?.state || convo?.conversationState || null;
+      if (currentState !== "QUOTE_DRAFTED") {
+        const { transportZone, transportRoundTripMx } = resolveTransportByCity(q.city);
+
+        // Si no pudimos resolver zona, igual generamos con transporte 0, pero lo dejamos claro.
+        const durationDays = Number(q.durationDays);
+
+        const equipment = {
+          equipmentModel: "45FT",
+          type: q.liftType,        // "BRAZO" / "TIJERA"
+          height_m: Number(q.heightMeters),
+          terrain: q.terrain,
+          activity: q.activity
+        };
+
+        const result = await createDraftQuoteWithPdf({
+          companyId: company.id,
+          lead: {
+            name: lead.name || null,
+            phone: from,
+            email: lead.email || null,
+            city: q.city || null
+          },
+          durationDays,
+          transportZone,
+          transportRoundTripMx,
+          equipment,
+          meta: {
+            source: "whatsapp",
+            conversationId: convo.id,
+            qualificationSnapshot: q
+          }
+        });
+
+        // Cambia estado conversacional para no duplicar
+        await setConversationState(convo.id, "QUOTE_DRAFTED");
+
+        const totalExact = result.options?.[0]?.totalMx ?? null;
+
+        const reply = buildQuoteDraftedReply({
+          leadName: lead.name,
+          quoteNumber: result.quoteNumber,
+          durationDays,
+          totalExactMx: totalExact,
+          transportZone,
+          transportRoundTripMx
+        });
+
+        // Guarda outbound
+        await saveMessage({
+          companyId: company.id,
+          conversationId: convo.id,
+          direction: "OUTBOUND",
+          body: reply,
+          waMessageId: null,
+          rawPayload: null
+        });
+
+        await sendWhatsAppText(from, reply);
+        return;
+      }
+
+      // Si ya existe QUOTE_DRAFTED, solo pedimos email de nuevo (sin regenerar)
+      const reply = "Ya tengo tu cotización lista. ¿A qué email te la envío en PDF?";
+      await saveMessage({
+        companyId: company.id,
+        conversationId: convo.id,
+        direction: "OUTBOUND",
+        body: reply,
+        waMessageId: null,
+        rawPayload: null
+      });
+      await sendWhatsAppText(from, reply);
+      return;
+    }
+
+    // 7) Si falta info, seguimos calificando normal
     await setConversationState(convo.id, nextState);
 
-    // 7) Construir respuesta SIN ECO
     const reply = buildNextQuestion({
       leadName: lead.name,
       missing
@@ -191,12 +271,65 @@ app.post("/webhooks/whatsapp", async (req, res) => {
       rawPayload: null
     });
 
-    // 8) Enviar WhatsApp
     await sendWhatsAppText(from, reply);
   } catch (e) {
     console.log("Webhook error:", e);
   }
 });
+
+function mxn(n) {
+  const val = Number.isFinite(n) ? n : 0;
+  return val.toLocaleString("es-MX", { style: "currency", currency: "MXN", maximumFractionDigits: 0 });
+}
+
+// Transporte redondo (SIN IVA) según doc maestro :contentReference[oaicite:1]{index=1}
+function resolveTransportByCity(cityRaw) {
+  const city = String(cityRaw || "").toLowerCase();
+
+  // Defaults
+  let transportZone = "Otra zona";
+  let transportRoundTripMx = 0;
+
+  if (city.includes("ramos")) {
+    transportZone = "Ramos Arizpe";
+    transportRoundTripMx = 2500;
+  } else if (city.includes("saltillo")) {
+    // Si el usuario no especifica norte/sur, usamos Norte por default (más conservador)
+    transportZone = "Saltillo Norte";
+    transportRoundTripMx = 2500;
+  } else if (city.includes("arteaga")) {
+    transportZone = "Arteaga";
+    transportRoundTripMx = 3000;
+  } else if (city.includes("derrama")) {
+    transportZone = "Derramadero";
+    transportRoundTripMx = 4500;
+  } else if (city.includes("santa catarina")) {
+    transportZone = "Santa Catarina";
+    transportRoundTripMx = 4500;
+  } else if (city.includes("apodaca")) {
+    transportZone = "Apodaca";
+    transportRoundTripMx = 4500;
+  }
+
+  return { transportZone, transportRoundTripMx };
+}
+
+function buildQuoteDraftedReply({ leadName, quoteNumber, durationDays, totalExactMx, transportZone, transportRoundTripMx }) {
+  const name = leadName ? `${leadName}` : "¡Listo!";
+  const durTxt = durationDays === 1 ? "1 día" : `${durationDays} días`;
+
+  const transportTxt =
+    transportRoundTripMx > 0
+      ? `Transporte redondo (${transportZone}): ${mxn(transportRoundTripMx)} + IVA.`
+      : `Transporte: por cotizar (necesito zona exacta).`;
+
+  const totalTxt =
+    Number.isFinite(totalExactMx) && totalExactMx > 0
+      ? `Total (tu solicitud ${durTxt}, con IVA): ${mxn(totalExactMx)}.`
+      : `Ya generé la cotización base para ${durTxt}.`;
+
+  return `${name}. ✅ Generé tu cotización *${quoteNumber}*.\n\n${totalTxt}\n${transportTxt}\n\n¿A qué *email* te la envío en PDF?`;
+}
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Listening on ${port}`));
