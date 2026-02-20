@@ -1,5 +1,5 @@
 /**
- * src/quote_service.js  (ESM)
+ * src/quote_service.js (ESM)
  * Creates:
  *  - pricing options (exact + refs)
  *  - PDF buffer (Playwright)
@@ -7,11 +7,8 @@
  */
 
 import { PrismaClient } from "@prisma/client";
+import { computeComparativeOptions } from "./pricing_engine_v2.js";
 import { generateQuotePdfBuffer } from "./pdf_quote.js";
-
-// pricing_engine_v2 is still CommonJS (module.exports). Import default and destructure.
-import pricingEngine from "./pricing_engine_v2.js";
-const { computeComparativeOptions } = pricingEngine;
 
 const prisma = new PrismaClient();
 
@@ -51,7 +48,7 @@ export async function createDraftQuoteWithPdf(input) {
   // 1) Upsert Lead (scoped to company)
   const leadRecord = await upsertLead(companyId, lead);
 
-  // 2) Compute pricing options: [primary exact, ref 7, ref 30] (or fallback 1D)
+  // 2) Pricing options: [primary exact, ref 7, ref 30] (or fallback 1D)
   const { options } = computeComparativeOptions({
     durationDays: d,
     equipmentModel,
