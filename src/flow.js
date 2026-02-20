@@ -5,20 +5,28 @@ export function extractNameFromText(text) {
   if (!text) return null;
   const t = text.trim();
 
-  // Si el usuario escribe solo 1-3 palabras, lo tomamos como nombre (controlado)
+  // Solo aceptar nombre cuando es explícito
+  const m = t.match(/^(soy|me llamo|mi nombre es)\s+(.{2,40})$/i);
+  if (m && m[2]) return sanitizeName(m[2]);
+
+  // O cuando el mensaje ES claramente un nombre (1-2 palabras, sin signos)
   const words = t.split(/\s+/).filter(Boolean);
-  if (words.length >= 1 && words.length <= 3) {
-    // Evita cosas obvias que no son nombre
-    const blacklist = new Set(["hola", "buenas", "ok", "si", "no", "gracias"]);
-    const first = words[0].toLowerCase();
-    if (!blacklist.has(first)) return words.join(" ");
+  if (words.length >= 1 && words.length <= 2) {
+    if (/[0-9@#%$^&*()_=+{}\[\]|\\:;"'<>,.?/!]/.test(t)) return null;
+
+    const blacklist = new Set(["hola", "buenas", "ok", "si", "sí", "no", "gracias", "jalo", "jalara", "test", "prueba"]);
+    if (blacklist.has(words[0].toLowerCase())) return null;
+
+    return sanitizeName(words.join(" "));
   }
 
-  // "Soy X"
-  let m = t.match(/^(soy|me llamo|mi nombre es)\s+(.{2,40})$/i);
-  if (m && m[2]) return m[2].trim();
-
   return null;
+}
+
+function sanitizeName(name) {
+  let s = (name || "").replace(/[^\p{L}\p{M}\s'.-]/gu, "").trim();
+  if (s.length < 2 || s.length > 30) return null;
+  return s;
 }
 
 export function decideNextReply({ leadName, incomingText, conversationState }) {
