@@ -5,11 +5,7 @@ export async function getOrCreateCompany() {
   return prisma.company.upsert({
     where: { name },
     update: {},
-    create: {
-      name,
-      paintDepositMxn: 7500,
-      paintSurchargePct: 15
-    }
+    create: { name, paintDepositMxn: 7500, paintSurchargePct: 15 }
   });
 }
 
