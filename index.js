@@ -1,4 +1,5 @@
 import express from "express";
+import { getOrCreateCompany, upsertLead, getOrCreateConversation, saveMessage } from "./src/crm.js";
 
 const app = express();
 app.use(express.json());
@@ -68,8 +69,36 @@ app.post("/webhooks/whatsapp", async (req, res) => {
       return;
     }
 
-    // 2) Respuesta simple tipo “echo”
-    await sendWhatsAppText(from, `VEXIQO ✅ Recibí: "${text}"`);
+    // 2) CRM: company -> lead -> conversation
+    const company = await getOrCreateCompany();
+    const lead = await upsertLead(company.id, from);
+    const convo = await getOrCreateConversation(company.id, lead.id);
+
+    // 3) Guarda mensaje inbound
+    await saveMessage({
+      companyId: company.id,
+      conversationId: convo.id,
+      direction: "INBOUND",
+      body: text,
+      waMessageId: msg.id,
+      rawPayload: req.body
+    });
+
+    // 4) Respuesta simple tipo “echo”
+    const reply = `VEXIQO ✅ Recibí: "${text}"`;
+
+    // 5) Guarda mensaje outbound
+    await saveMessage({
+      companyId: company.id,
+      conversationId: convo.id,
+      direction: "OUTBOUND",
+      body: reply,
+      waMessageId: null,
+      rawPayload: null
+    });
+
+    // 6) Envía WhatsApp
+    await sendWhatsAppText(from, reply);
   } catch (e) {
     console.log("Webhook error:", e);
   }
@@ -77,3 +106,4 @@ app.post("/webhooks/whatsapp", async (req, res) => {
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Listening on ${port}`));
+
