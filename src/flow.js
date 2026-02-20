@@ -54,7 +54,7 @@ export function decideNextReply({ leadName, incomingText, conversationState }) {
     return {
       action: "ASK_HEIGHT",
       nextState: "TECH_QUALIFICATION",
-      reply: `Gracias, ${leadName}. Para confirmar compatibilidad rápido: ¿qué altura necesitas alcanzar? (en metros o pies)`
+      reply: `Gracias, ${leadName}. Para confirmar compatibilidad rápido: ¿qué altura necesitas alcanzar? (ej: 14m o 45ft)`
     };
   }
 
