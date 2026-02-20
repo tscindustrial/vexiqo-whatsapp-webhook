@@ -1,7 +1,5 @@
 import express from "express";
 import { extractLeadFields } from "./src/ai_extractor.js";
-import { updateQualificationFromExtract } from "./src/crm.js";
-
 
 import {
   getOrCreateCompany,
@@ -11,11 +9,9 @@ import {
   setLeadName,
   setConversationState,
   getOrCreateQualification,
-  updateQualificationHeight
+  getQualification,
+  patchQualificationFromExtract
 } from "./src/crm.js";
-
-import { decideNextReply } from "./src/flow.js";
-import { parseHeight } from "./src/parse.js";
 
 const app = express();
 app.use(express.json());
@@ -63,8 +59,43 @@ async function sendWhatsAppText(to, body) {
   console.log("Send response:", resp.status, JSON.stringify(data));
 }
 
+function buildNextQuestion({ leadName, missing }) {
+  if (!leadName) {
+    return "Hola 👋 Soy VEXIQO de TSC Industrial. ¿Me compartes tu nombre para apoyarte mejor?";
+  }
+
+  if (!missing || missing.length === 0) {
+    return "Perfecto. Ya tengo lo necesario para validar compatibilidad. Dame un momento.";
+  }
+
+  const next = missing[0];
+
+  // Orden técnico primero (como pediste)
+  if (next === "height_m") {
+    return `Gracias, ${leadName}. ¿Qué altura necesitas alcanzar? (ej: 14m o 45ft)`;
+  }
+  if (next === "type") {
+    return "¿Necesitas brazo articulado o tijera?";
+  }
+  if (next === "activity") {
+    return "¿El trabajo es de pintura o uso general?";
+  }
+  if (next === "terrain") {
+    return "¿El terreno es piso firme (concreto) o terracería?";
+  }
+  if (next === "city") {
+    return "¿En qué ciudad es el trabajo? (ej: Saltillo, Monterrey)";
+  }
+  if (next === "duration_days") {
+    return "¿Cuántos días necesitas el equipo?";
+  }
+
+  return "Perfecto. ¿Me confirmas terreno, ciudad y duración?";
+}
+
 app.post("/webhooks/whatsapp", async (req, res) => {
-  res.sendStatus(200); // responde rápido a Meta
+  // Responde rápido a Meta
+  res.sendStatus(200);
 
   try {
     const entry = req.body?.entry?.[0];
@@ -74,104 +105,83 @@ app.post("/webhooks/whatsapp", async (req, res) => {
     const msg = value?.messages?.[0];
     if (!msg) return;
 
-    const from = msg.from; // número del cliente
+    const from = msg.from;
     const text = msg?.text?.body || "";
 
     console.log("Incoming:", from, text);
 
-    // 1) Por ahora: SOLO responderte a ti (seguridad)
+    // Seguridad: por ahora solo admin
     if (ADMIN_PHONE && from !== ADMIN_PHONE) {
       console.log("Ignoring non-admin sender:", from);
       return;
     }
 
-    // 2) CRM: company -> lead -> conversation
-    const company = await getOrCreateCompany();
+    // 1) CRM base
+    const company = await getOrCreateCompany(); // por ahora 1 empresa (TSC)
     const lead = await upsertLead(company.id, from);
     const convo = await getOrCreateConversation(company.id, lead.id);
 
- // 🔹 AQUÍ VA EL BLOQUE NUEVO 🔹
-let extracted = null;
-try {
-  extracted = await extractLeadFields({
-    text,
-    known: { name: lead.name }
-  });
-  console.log("AI extracted:", extracted);
-  // Guardar nombre si venía en el extract y no estaba guardado
-if (!lead.name && extracted?.name) {
-  await setLeadName(lead.id, extracted.name);
-  lead.name = extracted.name;
-}
-
-// Guardar requisitos técnicos/comerciales en Qualification
-if (extracted) {
-  await updateQualificationFromExtract(lead.id, extracted);
-}
-} catch (e) {
-  console.log("AI extractor error:", e);
-}
-
-// Si no tenemos nombre guardado y la IA detectó uno → guardarlo
-if (!lead.name && extracted?.name) {
-  await setLeadName(lead.id, extracted.name);
-  lead.name = extracted.name; // actualizar variable local
-}
-// 🔹 FIN BLOQUE NUEVO 🔹
-
-    // 4) Motor conversacional (nombre primero)
-    const decision = decideNextReply({
-      leadName: lead.name,
-      incomingText: text,
-      conversationState: convo.state
+    // Guarda inbound
+    await saveMessage({
+      companyId: company.id,
+      conversationId: convo.id,
+      direction: "INBOUND",
+      body: text,
+      waMessageId: msg.id || null,
+      rawPayload: msg
     });
 
-    if (decision.action === "SAVE_NAME_AND_ADVANCE") {
-      await setLeadName(lead.id, decision.name);
+    // 2) Asegura que exista Qualification (acumulado por lead)
+    await getOrCreateQualification(company.id, lead.id);
+
+    // 3) IA extractor (NO debe tumbar el flujo si falla)
+    let extracted = null;
+    try {
+      extracted = await extractLeadFields({
+        text,
+        known: {
+          name: lead.name || null
+          // si luego quieres, aquí metemos known con datos de qualification también
+        }
+      });
+      console.log("AI extracted:", extracted);
+    } catch (e) {
+      console.log("AI extractor error:", e);
     }
 
-    // 5) Si estamos en calificación técnica, intentamos parsear altura y guardarla
-    if (decision.nextState === "TECH_QUALIFICATION") {
-      const { meters, feet } = parseHeight(text);
-      if (meters || feet) {
-        await updateQualificationHeight(lead.id, meters, feet);
-      }
+    // 4) Persistir lo extraído (sin borrar lo anterior)
+    if (!lead.name && extracted?.name) {
+      await setLeadName(lead.id, extracted.name);
+      lead.name = extracted.name;
     }
 
-    // 6) Persistir estado
-    await setConversationState(convo.id, decision.nextState);
-
-    // 7) Respuesta
-    let reply = decision.reply;
-
-// Si la IA extrajo campos, preferimos preguntar lo faltante y NO hacer eco
-if (extracted) {
-  // Si aún falta nombre (no debería si extracted.name vino), pedimos nombre
-  if (!lead.name) {
-    reply = "Hola 👋 Soy VEXIQO de TSC Industrial. ¿Me compartes tu nombre para apoyarte mejor?";
-  } else if (extracted?.missing?.length) {
-    if (extracted.missing.includes("terrain")) {
-      reply = "Gracias. ¿El terreno es piso firme (concreto) o terracería?";
-    } else if (extracted.missing.includes("city")) {
-      reply = "¿En qué ciudad es el trabajo? (ej: Saltillo, Monterrey)";
-    } else if (extracted.missing.includes("duration_days")) {
-      reply = "¿Cuántos días necesitas el equipo?";
-    } else if (extracted.missing.includes("height_m")) {
-      reply = `Gracias, ${lead.name}. ¿Qué altura necesitas alcanzar? (ej: 14m o 45ft)`;
-    } else if (extracted.missing.includes("type")) {
-      reply = "¿Necesitas brazo articulado o tijera?";
-    } else if (extracted.missing.includes("activity")) {
-      reply = "¿El trabajo es de pintura o uso general?";
-    } else {
-      reply = "Perfecto. Para validar compatibilidad, ¿me confirmas terreno, ciudad y duración?";
+    if (extracted) {
+      await patchQualificationFromExtract(lead.id, extracted);
     }
-  } else {
-    reply = "Perfecto. Ya tengo lo necesario para validar compatibilidad. Dame un momento.";
-  }
-}
 
+    // 5) Leer acumulado desde BD y calcular faltantes DESDE LO ACUMULADO
+    const q = await getQualification(lead.id);
 
-    // 8) Guarda mensaje outbound
+    const missing = [];
+    if (!q?.heightMeters) missing.push("height_m");
+    if (!q?.liftType) missing.push("type");
+    if (!q?.activity) missing.push("activity");
+    if (!q?.terrain) missing.push("terrain");
+    if (!q?.city) missing.push("city");
+    if (!q?.durationDays) missing.push("duration_days");
+
+    // 6) Definir estado conversacional (simple por ahora)
+    // Si falta algo, seguimos calificando. Si no falta, listo para motor determinístico.
+    const nextState = missing.length > 0 ? "TECH_QUALIFICATION" : "READY_FOR_MATCH";
+    await setConversationState(convo.id, nextState);
+
+    // 7) Construir respuesta SIN ECO
+    const reply = buildNextQuestion({
+      leadName: lead.name,
+      missing
+    });
+
+    // Guarda outbound
     await saveMessage({
       companyId: company.id,
       conversationId: convo.id,
@@ -181,7 +191,7 @@ if (extracted) {
       rawPayload: null
     });
 
-    // 9) Envía WhatsApp
+    // 8) Enviar WhatsApp
     await sendWhatsAppText(from, reply);
   } catch (e) {
     console.log("Webhook error:", e);
