@@ -78,4 +78,21 @@ export async function updateQualificationHeight(leadId, heightMeters, heightFeet
     }
   });
 }
+export async function updateQualificationFromExtract(leadId, extracted) {
+  const data = {};
 
+  if (extracted.height_m != null) data.heightMeters = extracted.height_m;
+  if (extracted.type) data.liftType = extracted.type;
+  if (extracted.activity) data.activity = extracted.activity;
+  if (extracted.terrain) data.terrain = extracted.terrain;
+  if (extracted.city) data.city = extracted.city;
+  if (extracted.duration_days != null) data.durationDays = extracted.duration_days;
+
+  // Si no hay nada que actualizar, evita query
+  if (Object.keys(data).length === 0) return null;
+
+  return prisma.qualification.update({
+    where: { leadId },
+    data
+  });
+}
