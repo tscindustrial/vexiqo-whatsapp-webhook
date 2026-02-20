@@ -11,6 +11,7 @@ enum ConversationState {
   INIT
   ASK_NAME
   TECH_QUALIFICATION
+  READY_FOR_MATCH
 }
 
 enum MessageDirection {
