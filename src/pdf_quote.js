@@ -1,15 +1,4 @@
-/**
- * src/pdf_quote.js
- * PDF generator (PDFKit)
- *
- * Exports:
- * - generateQuotePdfBuffer({ company, lead, quote, equipment, options, requestedDays, terms })
- * returns: { buffer: Buffer, filename: string }
- */
-
 import PDFDocument from "pdfkit";
-import fs from "node:fs";
-import path from "node:path";
 
 function moneyShortMx(n) {
   const v = Math.round(Number(n || 0));
@@ -46,16 +35,6 @@ function roundedBox(doc, x, y, w, h, r, fill, stroke) {
   doc.restore();
 }
 
-function tryLoadPng(rel) {
-  try {
-    const p = path.join(process.cwd(), rel);
-    if (!fs.existsSync(p)) return null;
-    return p;
-  } catch {
-    return null;
-  }
-}
-
 function drawSectionTitle(doc, x, y, title) {
   doc.font("Helvetica-Bold").fontSize(10.5).fillColor("#0f172a").text(title, x, y);
 }
@@ -85,33 +64,22 @@ function effectivePerDay(opt) {
   return Math.round(base / d);
 }
 
-/**
- * Bullet list que NO se sale de una caja fija.
- * Va imprimiendo hasta que ya no cabe.
- */
 function drawBulletListFit(doc, x, y, w, maxBottomY, items) {
   doc.font("Helvetica").fontSize(8.4).fillColor("#334155");
 
   let cy = y;
   for (const t of items) {
     const text = safeText(t);
-
-    // calculo altura antes de pintar
-    const h = doc.heightOfString(text, { width: w - 12, lineGap: 1.5 });
-
-    // bullet + texto requieren h + padding
+    const h = doc.heightOfString(text, { width: w - 12, lineGap: 1.4 });
     const needed = Math.max(12, h) + 6;
     if (cy + needed > maxBottomY) break;
 
-    // bullet
     doc.circle(x + 3, cy + 4, 1.4).fill("#334155");
     doc.fillColor("#334155");
 
-    // text
-    doc.text(text, x + 12, cy, { width: w - 12, lineGap: 1.5 });
+    doc.text(text, x + 12, cy, { width: w - 12, lineGap: 1.4 });
     cy += needed;
   }
-
   return cy;
 }
 
@@ -128,11 +96,7 @@ export async function generateQuotePdfBuffer(payload) {
 
   const doc = new PDFDocument({
     size: "A4",
-    margins: { top: 28, left: 32, right: 32, bottom: 28 },
-    info: {
-      Title: `Cotización ${safeText(quote.quoteNumber || "")}`,
-      Author: safeText(company.name || "VEXIQO"),
-    },
+    margins: { top: 26, left: 32, right: 32, bottom: 26 },
   });
 
   const chunks = [];
@@ -148,50 +112,31 @@ export async function generateQuotePdfBuffer(payload) {
   const x0 = doc.page.margins.left;
   const contentW = pageW - doc.page.margins.left - doc.page.margins.right;
 
-  // ===== Header (compacto, sin logo derecho) =====
-  const headerH = 90;
+  // ===== Header (sin logos, limpio) =====
+  const headerH = 86;
   doc.save();
   doc.rect(0, 0, pageW, headerH).fill("#0b1220");
   doc.restore();
 
-  const logoFull = tryLoadPng("assets/tsc_logo_full.png");
+  // Texto empresa (como tu primer intento)
+  doc.font("Helvetica-Bold").fontSize(16).fillColor("#ffffff");
+  doc.text("TS Contratistas", x0, 22, { width: contentW });
 
-  // card blanco para logo con texto (se ve pro)
-  const logoBoxW = 210;
-  const logoBoxH = 50;
-  const logoBoxX = x0;
-  const logoBoxY = 20;
+  doc.font("Helvetica").fontSize(8.6).fillColor("#cbd5e1");
+  doc.text("Cotización automática generada por VEXIQO", x0, 44, { width: contentW });
 
-  roundedBox(doc, logoBoxX, logoBoxY, logoBoxW, logoBoxH, 14, "#ffffff", null);
-
-  if (logoFull) {
-    doc.image(logoFull, logoBoxX + 14, logoBoxY + 11, { height: 28 });
-  } else {
-    doc.font("Helvetica-Bold").fontSize(14).fillColor("#0f172a").text(
-      safeText(company.name || "TSC Industrial"),
-      logoBoxX + 14,
-      logoBoxY + 16,
-      { width: logoBoxW - 28 }
-    );
-  }
-
-  // Subtítulo
-  doc.font("Helvetica").fontSize(8.5).fillColor("#cbd5e1");
-  doc.text("Cotización automática generada por VEXIQO", x0, 74, { width: contentW });
-
-  // Meta derecha (folio/fecha) sin estorbo del logo
   const folio = safeText(quote.quoteNumber || "—");
   const fecha = fmtDateEsMX(quote.createdAtISO || Date.now());
 
   doc.font("Helvetica").fontSize(8.5).fillColor("#cbd5e1");
-  doc.text("Folio", x0, 22, { width: contentW, align: "right" });
+  doc.text("Folio", x0, 20, { width: contentW, align: "right" });
   doc.font("Helvetica-Bold").fontSize(10.5).fillColor("#ffffff");
-  doc.text(folio, x0, 34, { width: contentW, align: "right" });
+  doc.text(folio, x0, 32, { width: contentW, align: "right" });
 
   doc.font("Helvetica").fontSize(8.5).fillColor("#cbd5e1");
-  doc.text("Fecha", x0, 52, { width: contentW, align: "right" });
+  doc.text("Fecha", x0, 50, { width: contentW, align: "right" });
   doc.font("Helvetica-Bold").fontSize(9.5).fillColor("#ffffff");
-  doc.text(fecha || "—", x0, 64, { width: contentW, align: "right" });
+  doc.text(fecha || "—", x0, 62, { width: contentW, align: "right" });
 
   // Divider
   doc.save();
@@ -200,22 +145,21 @@ export async function generateQuotePdfBuffer(payload) {
 
   let y = headerH + 12;
 
-  // ===== Zona pill =====
+  // Zona pill
   if (quote.transportZone) {
     const text = `Zona: ${safeText(quote.transportZone)}`;
     doc.font("Helvetica-Bold").fontSize(8).fillColor("#ffffff");
 
     const padX = 10;
     const pillW = doc.widthOfString(text) + padX * 2;
-    const pillH = 16;
 
-    roundedBox(doc, x0, y, pillW, pillH, 8, "#0ea5e9", null);
+    roundedBox(doc, x0, y, pillW, 16, 8, "#0ea5e9", null);
     doc.text(text, x0 + padX, y + 4, { width: pillW - padX * 2 });
     y += 20;
   }
 
-  // ===== Cards Cliente / Requerimiento =====
-  const cardH = 78;
+  // Cards
+  const cardH = 76;
   roundedBox(doc, x0, y, contentW, cardH, 14, "#f8fafc", null);
 
   drawSectionTitle(doc, x0 + 14, y + 12, "Cliente");
@@ -233,28 +177,26 @@ export async function generateQuotePdfBuffer(payload) {
     equipment.height_m != null && safeText(equipment.height_m) !== ""
       ? `${safeText(equipment.height_m)} m`
       : "—";
-
   drawKV(doc, x0 + 300, y + 46, "Altura:", heightTxt, 55, 170);
 
   y += cardH + 10;
 
-  // ===== Strip técnico =====
-  const stripH = 42;
+  // Strip técnico
+  const stripH = 40;
   roundedBox(doc, x0, y, contentW, stripH, 14, "#ffffff", "#e2e8f0");
 
-  // ✅ Fix ciudad: fallback a transportZone antes de mostrar "—"
   const cityVal = safeText(equipment.city || lead.city || quote.transportZone || "—");
 
-  drawKV(doc, x0 + 14, y + 12, "Ciudad:", cityVal, 55, 190);
-  drawKV(doc, x0 + 260, y + 12, "Terreno:", safeText(equipment.terrain || "—"), 60, 190);
-  drawKV(doc, x0 + 14, y + 28, "Actividad:", safeText(equipment.activity || "—"), 55, 190);
+  drawKV(doc, x0 + 14, y + 11, "Ciudad:", cityVal, 55, 190);
+  drawKV(doc, x0 + 260, y + 11, "Terreno:", safeText(equipment.terrain || "—"), 60, 190);
+  drawKV(doc, x0 + 14, y + 26, "Actividad:", safeText(equipment.activity || "—"), 55, 190);
 
   const durTxt = requestedDays ? `${requestedDays} días` : "—";
-  drawKV(doc, x0 + 260, y + 28, "Duración:", durTxt, 60, 190);
+  drawKV(doc, x0 + 260, y + 26, "Duración:", durTxt, 60, 190);
 
-  y += stripH + 14;
+  y += stripH + 12;
 
-  // ===== Tabla comparativa =====
+  // Tabla
   drawSectionTitle(doc, x0, y, "Opciones de cotización");
   y += 12;
 
@@ -271,16 +213,15 @@ export async function generateQuotePdfBuffer(payload) {
     }
   });
 
-  // Anchos para que NO se rompa Total
   const cols = [
-    { label: "Opción", w: 145, align: "left" },
-    { label: "Precio / día", w: 75, align: "right" },
+    { label: "Opción", w: 155, align: "left" },
+    { label: "Precio / día", w: 80, align: "right" },
     { label: "Equipo (sin IVA)", w: 95, align: "right" },
     { label: "Transporte", w: 75, align: "right" },
     { label: "IVA 16%", w: 60, align: "right" },
-    { label: "Total", w: 70, align: "right" },
+    { label: "Total", w: 55, align: "right" },
   ];
-  const tableW = cols.reduce((a, c) => a + c.w, 0); // 520
+  const tableW = cols.reduce((a, c) => a + c.w, 0); // 520 exact
 
   roundedBox(doc, x0, y, tableW, 22, 10, "#0f172a", null);
   doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(8);
@@ -292,8 +233,7 @@ export async function generateQuotePdfBuffer(payload) {
   }
   y += 28;
 
-  // Rows (max 4)
-  const maxRows = Math.min(usableOptions.length, 4);
+  const maxRows = Math.min(usableOptions.length, 4); // solicitado + 1/7/30
   const rowH = 24;
   const gap = 5;
 
@@ -326,40 +266,35 @@ export async function generateQuotePdfBuffer(payload) {
       cx += c.w;
     }
 
-    // ✅ Badge dinámico dentro de columna "Opción" sin invadir "Precio/día"
+    // Badge centrado dentro de columna Opción (sin tocar precio/día)
     if (isBest) {
-      const badge = "★ Mejor costo / día";
+      const badge = "Mejor costo / día";
       doc.font("Helvetica-Bold").fontSize(7.8);
-      const padX = 7;
+
+      const padX = 8;
       const bw = doc.widthOfString(badge) + padX * 2;
       const bh = 13;
 
       const col0X = x0;
       const col0W = cols[0].w;
 
-      const labelW = doc.widthOfString(label);
-      const minX = col0X + 8;
-      const maxX = col0X + col0W - bw - 10;
-
-      // intentamos ponerlo después del label, pero clamp para que no toque la siguiente columna
-      let bx = minX + labelW + 10;
-      if (bx > maxX) bx = maxX;
-      if (bx < minX) bx = minX;
-
+      // centrar badge dentro de la columna Opción
+      const bx = col0X + Math.round((col0W - bw) / 2);
       const by = y + 5;
 
       roundedBox(doc, bx, by, bw, bh, 7, "#16a34a", null);
-      doc.fillColor("#ffffff").text(badge, bx + padX, by + 2, { width: bw - padX * 2 });
+      doc.fillColor("#ffffff");
+      doc.text(badge, bx, by + 2, { width: bw, align: "center" });
     }
 
     y += rowH + gap;
   }
 
-  // ===== Resumen (sin traslapes) =====
+  // Resumen
   const main = usableOptions?.[0] || null;
   y += 6;
 
-  const sumH = 72;
+  const sumH = 70;
   roundedBox(doc, x0, y, contentW, sumH, 16, "#0f172a", null);
 
   doc.font("Helvetica-Bold").fontSize(9.8).fillColor("#ffffff");
@@ -371,9 +306,9 @@ export async function generateQuotePdfBuffer(payload) {
     width: 320,
   });
 
-  // ✅ Dos columnas: label izquierda, valor derecha
-  const blockW = 210;
-  const blockX = x0 + contentW - blockW;
+  // bloque derecho con padding interno (NO pegado al borde)
+  const blockW = 220;
+  const blockX = x0 + contentW - blockW - 10; // padding extra
   const labelW = 120;
   const valueW = blockW - labelW;
 
@@ -388,48 +323,44 @@ export async function generateQuotePdfBuffer(payload) {
   doc.text(mxn(main?.vatMx || 0), blockX + labelW, y + 42, { width: valueW, align: "right" });
 
   doc.font("Helvetica-Bold").fontSize(15.5).fillColor("#ffffff");
-  doc.text(mxn(main?.totalMx || 0), blockX, y + 54, { width: blockW, align: "right" });
+  doc.text(mxn(main?.totalMx || 0), blockX, y + 52, { width: blockW, align: "right" });
 
-  y += sumH + 12;
+  y += sumH + 10;
 
-  // ===== Condiciones (fit dentro de caja) =====
+  // Condiciones (siempre incluye transporte + vigencia)
   drawSectionTitle(doc, x0, y, "Condiciones");
   y += 12;
 
-  const termsList =
-    Array.isArray(terms) && terms.length
-      ? terms
-      : [
-          "Precios sin IVA. IVA 16% por separado.",
-          "Transporte redondo según zona (si aplica).",
-          "Vigencia: 48 horas.",
-        ];
+  const required = [
+    "Transporte redondo según zona (si aplica).",
+    "Vigencia: 48 horas.",
+  ];
 
-  const termsBoxH = 92;
+  // si terms trae algo extra (como optimización), lo ponemos primero y luego garantizamos required
+  const extras = Array.isArray(terms) ? terms.filter(Boolean) : [];
+  const merged = [];
+
+  for (const t of extras) {
+    if (!merged.includes(t)) merged.push(t);
+  }
+  for (const t of required) {
+    if (!merged.includes(t)) merged.push(t);
+  }
+  // y aseguramos también IVA si no venía
+  if (!merged.some((t) => String(t).toLowerCase().includes("iva"))) {
+    merged.splice(merged.length - 2, 0, "Precios sin IVA. IVA 16% por separado.");
+  }
+
+  // caja fija pero con fit para que no se salga
+  const termsBoxH = 86;
   roundedBox(doc, x0, y, contentW, termsBoxH, 14, "#f8fafc", "#e2e8f0");
 
   const innerTop = y + 12;
   const innerBottom = y + termsBoxH - 12;
 
-  drawBulletListFit(doc, x0 + 14, innerTop, contentW - 28, innerBottom, termsList);
+  drawBulletListFit(doc, x0 + 14, innerTop, contentW - 28, innerBottom, merged);
 
-  y += termsBoxH + 8;
-
-  // ===== Footer (✅ dentro del margin para evitar página 2) =====
-  const footerLineY = pageH - doc.page.margins.bottom - 14; // seguro dentro
-  const footerTextY = footerLineY + 6; // también dentro (<= pageH - bottom)
-
-  doc.save();
-  doc.moveTo(x0, footerLineY)
-    .lineTo(x0 + contentW, footerLineY)
-    .strokeColor("#e2e8f0")
-    .lineWidth(1)
-    .stroke();
-  doc.restore();
-
-  doc.font("Helvetica").fontSize(8).fillColor("#64748b");
-  doc.text("Generado automáticamente por VEXIQO", x0, footerTextY, { width: contentW, align: "center" });
-
+  // ✅ IMPORTANTÍSIMO: no footer, no “text below margin” => NO página 2
   doc.end();
 
   const buffer = await bufferPromise;
