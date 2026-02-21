@@ -15,7 +15,6 @@ import {
 
 import { createDraftQuoteWithPdf } from "./src/quote_service.js";
 
-
 const app = express();
 app.use(express.json());
 
@@ -62,6 +61,76 @@ async function sendWhatsAppText(to, body) {
   console.log("Send response:", resp.status, JSON.stringify(data));
 }
 
+/**
+ * Envía un PDF como documento (WhatsApp Cloud API)
+ * Flujo: 1) upload media  2) send message document
+ */
+async function sendWhatsAppDocument(to, pdfBuffer, filename, caption) {
+  if (!WHATSAPP_TOKEN || !PHONE_NUMBER_ID) {
+    console.log("Missing WHATSAPP_TOKEN or WHATSAPP_PHONE_NUMBER_ID");
+    return;
+  }
+
+  if (!pdfBuffer || !filename) {
+    console.log("Missing pdfBuffer or filename for sendWhatsAppDocument");
+    return;
+  }
+
+  // 1) Upload media
+  const mediaUrl = `https://graph.facebook.com/v22.0/${PHONE_NUMBER_ID}/media`;
+
+  const form = new FormData();
+  form.append("messaging_product", "whatsapp");
+
+  // Node 18+ soporta Blob/FormData global.
+  const blob = new Blob([pdfBuffer], { type: "application/pdf" });
+  form.append("file", blob, filename);
+
+  const mediaResp = await fetch(mediaUrl, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${WHATSAPP_TOKEN}`
+      // NO setear Content-Type; fetch lo genera con boundary
+    },
+    body: form
+  });
+
+  const mediaData = await mediaResp.json();
+  console.log("Media upload:", mediaResp.status, JSON.stringify(mediaData));
+
+  const mediaId = mediaData?.id;
+  if (!mediaId) {
+    console.log("Media upload failed (no id). Falling back to text.");
+    await sendWhatsAppText(to, caption || "Ya generé tu cotización en PDF.");
+    return;
+  }
+
+  // 2) Send document message
+  const msgUrl = `https://graph.facebook.com/v22.0/${PHONE_NUMBER_ID}/messages`;
+  const msgPayload = {
+    messaging_product: "whatsapp",
+    to,
+    type: "document",
+    document: {
+      id: mediaId,
+      filename,
+      caption: caption || ""
+    }
+  };
+
+  const msgResp = await fetch(msgUrl, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(msgPayload)
+  });
+
+  const msgData = await msgResp.json();
+  console.log("Document send:", msgResp.status, JSON.stringify(msgData));
+}
+
 function buildNextQuestion({ leadName, missing }) {
   if (!leadName) {
     return "Hola 👋 Soy VEXIQO de TSC Industrial. ¿Me compartes tu nombre para apoyarte mejor?";
@@ -77,18 +146,23 @@ function buildNextQuestion({ leadName, missing }) {
   if (next === "height_m") {
     return `Gracias, ${leadName}. ¿Qué altura necesitas alcanzar? (ej: 14m o 45ft)`;
   }
+
   if (next === "type") {
     return "¿Necesitas brazo articulado o tijera?";
   }
+
   if (next === "activity") {
     return "¿El trabajo es de pintura o uso general?";
   }
+
   if (next === "terrain") {
     return "¿El terreno es piso firme (concreto) o terracería?";
   }
+
   if (next === "city") {
     return "¿En qué ciudad es el trabajo? (ej: Saltillo, Monterrey)";
   }
+
   if (next === "duration_days") {
     return "¿Cuántos días necesitas el equipo?";
   }
@@ -108,7 +182,7 @@ app.post("/webhooks/whatsapp", async (req, res) => {
     const msg = value?.messages?.[0];
     if (!msg) return;
 
-    const from = msg.from;
+    const from = msg?.from;
     const text = msg?.text?.body || "";
 
     console.log("Incoming:", from, text);
@@ -169,7 +243,7 @@ app.post("/webhooks/whatsapp", async (req, res) => {
     if (!q || q.heightMeters == null) missing.push("height_m");
     if (!q || !q.liftType) missing.push("type");
     if (!q || !q.activity) missing.push("activity");
-    if (!q || !q.terrain || String(q.terrain).trim() === "") missing.push("terrain");
+    if (!q || q.terrain || String(q.terrain).trim() === "") missing.push("terrain");
     if (!q || !q.city || String(q.city).trim() === "") missing.push("city");
     if (!q || q.durationDays == null) missing.push("duration_days");
 
@@ -188,7 +262,7 @@ app.post("/webhooks/whatsapp", async (req, res) => {
 
         const equipment = {
           equipmentModel: "45FT",
-          type: q.liftType,        // "BRAZO" / "TIJERA"
+          type: q.liftType, // "BRAZO" / "TIJERA"
           height_m: Number(q.heightMeters),
           terrain: q.terrain,
           activity: q.activity
@@ -227,7 +301,7 @@ app.post("/webhooks/whatsapp", async (req, res) => {
           transportRoundTripMx
         });
 
-        // Guarda outbound
+        // Guarda outbound (registramos el caption / confirmación)
         await saveMessage({
           companyId: company.id,
           conversationId: convo.id,
@@ -237,11 +311,12 @@ app.post("/webhooks/whatsapp", async (req, res) => {
           rawPayload: null
         });
 
-        await sendWhatsAppText(from, reply);
+        // ✅ ENVIAR PDF como documento por WhatsApp (con caption)
+        await sendWhatsAppDocument(from, result.pdfBuffer, result.filename, reply);
         return;
       }
 
-      // Si ya existe QUOTE_DRAFTED, solo pedimos email de nuevo (sin regenerar)
+      // Si ya existe QUOTE DRAFTED, solo pedimos email de nuevo (sin regenerar)
       const reply = "Ya tengo tu cotización lista. ¿A qué email te la envío en PDF?";
       await saveMessage({
         companyId: company.id,
@@ -284,7 +359,7 @@ function mxn(n) {
   return val.toLocaleString("es-MX", { style: "currency", currency: "MXN", maximumFractionDigits: 0 });
 }
 
-// Transporte redondo (SIN IVA) según doc maestro :contentReference[oaicite:1]{index=1}
+// Transporte redondo (SIN IVA) según doc maestro
 function resolveTransportByCity(cityRaw) {
   const city = String(cityRaw || "").toLowerCase();
 
@@ -323,14 +398,15 @@ function buildQuoteDraftedReply({ leadName, quoteNumber, durationDays, totalExac
   const transportTxt =
     transportRoundTripMx > 0
       ? `Transporte redondo (${transportZone}): ${mxn(transportRoundTripMx)} + IVA.`
-      : `Transporte: por cotizar (necesito zona exacta).`;
+      : "Transporte: por cotizar (necesito zona exacta).";
 
   const totalTxt =
     Number.isFinite(totalExactMx) && totalExactMx > 0
       ? `Total (tu solicitud ${durTxt}, con IVA): ${mxn(totalExactMx)}.`
       : `Ya generé la cotización base para ${durTxt}.`;
 
-  return `${name}. ✅ Generé tu cotización *${quoteNumber}*.\n\n${totalTxt}\n${transportTxt}\n\n¿A qué *email* te la envío en PDF?`;
+  // Caption corto (WhatsApp lo muestra en el documento)
+  return `${name}. ✅ Te envío tu cotización *${quoteNumber}* en PDF.\n\n${totalTxt}\n${transportTxt}`;
 }
 
 const port = process.env.PORT || 3000;
