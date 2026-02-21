@@ -69,19 +69,27 @@ export async function createDraftQuoteWithPdf(input) {
       totalMx: options[0]?.totalMx ?? 0,
       meta: meta || null,
       items: {
-        create: options.map((opt, idx) => ({
-          lineNo: idx + 1,
-          description:
-            idx === 0
-              ? `Renta solicitada (${opt.durationDays} días)`
-              : opt.durationDays === 7
-              ? "Referencia: Semana (7 días)"
-              : opt.durationDays === 30
-              ? "Referencia: Mes (30 días)"
-              : `Referencia (${opt.durationDays} días)`,
-          durationDays: opt.durationDays,
-          unitPricePerDayMx: opt.rentalBaseMx,
-          amountMx: opt.totalMx,
+create: options.map((opt, idx) => ({
+    lineNo: idx + 1,
+    description:
+      idx === 0
+        ? `Renta solicitada (${opt.durationDays} días)`
+        : opt.durationDays === 7
+        ? "Referencia: Semana (7 días)"
+        : opt.durationDays === 30
+        ? "Referencia: Mes (30 días)"
+        : `Referencia (${opt.durationDays} días)`,
+
+    durationDays: opt.durationDays,
+
+    // ✅ Prisma requiere unitPriceMx
+    // Guardamos precio unitario por día (coherente con el PDF comparativo)
+    unitPriceMx:
+      opt.durationDays && opt.durationDays > 0
+        ? Math.round(Number(opt.rentalBaseMx || 0) / Number(opt.durationDays))
+        : 0,
+
+    amountMx: opt.totalMx,
         })),
       },
     },
