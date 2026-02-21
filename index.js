@@ -243,7 +243,7 @@ app.post("/webhooks/whatsapp", async (req, res) => {
     if (!q || q.heightMeters == null) missing.push("height_m");
     if (!q || !q.liftType) missing.push("type");
     if (!q || !q.activity) missing.push("activity");
-    if (!q || q.terrain || String(q.terrain).trim() === "") missing.push("terrain");
+    if (!q || !q.terrain || String(q.terrain).trim() === "") missing.push("terrain");
     if (!q || !q.city || String(q.city).trim() === "") missing.push("city");
     if (!q || q.durationDays == null) missing.push("duration_days");
 
