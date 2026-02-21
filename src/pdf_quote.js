@@ -13,7 +13,6 @@ import path from "node:path";
 
 function moneyShortMx(n) {
   const v = Math.round(Number(n || 0));
-  // corto para tablas (evita wrap)
   return v.toLocaleString("es-MX", { maximumFractionDigits: 0 });
 }
 
@@ -34,19 +33,6 @@ function fmtDateEsMX(iso) {
   const d = iso ? new Date(iso) : new Date();
   if (Number.isNaN(d.getTime())) return "";
   return d.toLocaleDateString("es-MX", { year: "numeric", month: "short", day: "2-digit" });
-}
-
-function drawSectionTitle(doc, x, y, title) {
-  doc.font("Helvetica-Bold").fontSize(10.5).fillColor("#0f172a").text(title, x, y);
-}
-
-function drawKV(doc, x, y, label, value, labelW = 70, valueW = 210) {
-  doc.font("Helvetica").fontSize(8.8).fillColor("#334155").text(label, x, y, { width: labelW });
-  doc
-    .font("Helvetica-Bold")
-    .fontSize(8.8)
-    .fillColor("#0f172a")
-    .text(value, x + labelW, y, { width: valueW });
 }
 
 function roundedBox(doc, x, y, w, h, r, fill, stroke) {
@@ -70,6 +56,19 @@ function tryLoadPng(rel) {
   }
 }
 
+function drawSectionTitle(doc, x, y, title) {
+  doc.font("Helvetica-Bold").fontSize(10.5).fillColor("#0f172a").text(title, x, y);
+}
+
+function drawKV(doc, x, y, label, value, labelW = 70, valueW = 210) {
+  doc.font("Helvetica").fontSize(8.8).fillColor("#334155").text(label, x, y, { width: labelW });
+  doc
+    .font("Helvetica-Bold")
+    .fontSize(8.8)
+    .fillColor("#0f172a")
+    .text(value, x + labelW, y, { width: valueW });
+}
+
 function pickLabelForOption(opt, requestedDays) {
   const d = Number(opt?.durationDays || 0);
   if (requestedDays != null && d === Number(requestedDays)) return `Solicitado (${d} días)`;
@@ -86,22 +85,33 @@ function effectivePerDay(opt) {
   return Math.round(base / d);
 }
 
-function drawBulletList(doc, x, y, w, items, maxItems = 5) {
-  const list = Array.isArray(items) ? items.slice(0, maxItems) : [];
-  doc.font("Helvetica").fontSize(8.6).fillColor("#334155");
+/**
+ * Bullet list que NO se sale de una caja fija.
+ * Va imprimiendo hasta que ya no cabe.
+ */
+function drawBulletListFit(doc, x, y, w, maxBottomY, items) {
+  doc.font("Helvetica").fontSize(8.4).fillColor("#334155");
 
   let cy = y;
-  for (const t of list) {
+  for (const t of items) {
     const text = safeText(t);
+
+    // calculo altura antes de pintar
+    const h = doc.heightOfString(text, { width: w - 12, lineGap: 1.5 });
+
+    // bullet + texto requieren h + padding
+    const needed = Math.max(12, h) + 6;
+    if (cy + needed > maxBottomY) break;
+
     // bullet
     doc.circle(x + 3, cy + 4, 1.4).fill("#334155");
     doc.fillColor("#334155");
 
-    const textX = x + 12;
-    const h = doc.heightOfString(text, { width: w - 12, lineGap: 1.5 });
-    doc.text(text, textX, cy, { width: w - 12, lineGap: 1.5 });
-    cy += h + 6;
+    // text
+    doc.text(text, x + 12, cy, { width: w - 12, lineGap: 1.5 });
+    cy += needed;
   }
+
   return cy;
 }
 
@@ -138,41 +148,38 @@ export async function generateQuotePdfBuffer(payload) {
   const x0 = doc.page.margins.left;
   const contentW = pageW - doc.page.margins.left - doc.page.margins.right;
 
-  // ===== Header (más compacto) =====
-  const headerH = 92;
+  // ===== Header (compacto, sin logo derecho) =====
+  const headerH = 90;
   doc.save();
   doc.rect(0, 0, pageW, headerH).fill("#0b1220");
   doc.restore();
 
-  // Badge/logo container dentro del header (blanco) para que el logo con texto se vea premium
   const logoFull = tryLoadPng("assets/tsc_logo_full.png");
-  const logoMark = tryLoadPng("assets/tsc_logo_mark.png");
 
-  const logoBoxW = 190;
-  const logoBoxH = 52;
+  // card blanco para logo con texto (se ve pro)
+  const logoBoxW = 210;
+  const logoBoxH = 50;
   const logoBoxX = x0;
   const logoBoxY = 20;
 
   roundedBox(doc, logoBoxX, logoBoxY, logoBoxW, logoBoxH, 14, "#ffffff", null);
 
   if (logoFull) {
-    // logo con texto dentro del card blanco
-    doc.image(logoFull, logoBoxX + 14, logoBoxY + 12, { height: 28 });
+    doc.image(logoFull, logoBoxX + 14, logoBoxY + 11, { height: 28 });
   } else {
-    // fallback sin imagen
     doc.font("Helvetica-Bold").fontSize(14).fillColor("#0f172a").text(
       safeText(company.name || "TSC Industrial"),
       logoBoxX + 14,
-      logoBoxY + 18,
+      logoBoxY + 16,
       { width: logoBoxW - 28 }
     );
   }
 
-  // Subtítulo (tech, discreto)
+  // Subtítulo
   doc.font("Helvetica").fontSize(8.5).fillColor("#cbd5e1");
-  doc.text("Cotización automática generada por VEXIQO", x0, 76, { width: contentW });
+  doc.text("Cotización automática generada por VEXIQO", x0, 74, { width: contentW });
 
-  // Meta derecha (folio/fecha)
+  // Meta derecha (folio/fecha) sin estorbo del logo
   const folio = safeText(quote.quoteNumber || "—");
   const fecha = fmtDateEsMX(quote.createdAtISO || Date.now());
 
@@ -186,18 +193,6 @@ export async function generateQuotePdfBuffer(payload) {
   doc.font("Helvetica-Bold").fontSize(9.5).fillColor("#ffffff");
   doc.text(fecha || "—", x0, 64, { width: contentW, align: "right" });
 
-  // Logo mark pequeño a la derecha (si existe) dentro de un badge blanco para que no se vea cuadrado feo
-  if (logoMark) {
-    const markW = 34;
-    const markBoxW = 44;
-    const markBoxH = 44;
-    const markBoxX = pageW - doc.page.margins.right - markBoxW;
-    const markBoxY = 20;
-
-    roundedBox(doc, markBoxX, markBoxY, markBoxW, markBoxH, 14, "#ffffff", null);
-    doc.image(logoMark, markBoxX + 6, markBoxY + 6, { width: markW });
-  }
-
   // Divider
   doc.save();
   doc.rect(0, headerH, pageW, 1).fill("#0f172a");
@@ -205,7 +200,7 @@ export async function generateQuotePdfBuffer(payload) {
 
   let y = headerH + 12;
 
-  // ===== Zona pill (compacta) =====
+  // ===== Zona pill =====
   if (quote.transportZone) {
     const text = `Zona: ${safeText(quote.transportZone)}`;
     doc.font("Helvetica-Bold").fontSize(8).fillColor("#ffffff");
@@ -243,11 +238,13 @@ export async function generateQuotePdfBuffer(payload) {
 
   y += cardH + 10;
 
-  // ===== Strip técnico (ciudad/terreno/actividad/duración) =====
+  // ===== Strip técnico =====
   const stripH = 42;
   roundedBox(doc, x0, y, contentW, stripH, 14, "#ffffff", "#e2e8f0");
 
-  const cityVal = safeText(equipment.city || lead.city || "—");
+  // ✅ Fix ciudad: fallback a transportZone antes de mostrar "—"
+  const cityVal = safeText(equipment.city || lead.city || quote.transportZone || "—");
+
   drawKV(doc, x0 + 14, y + 12, "Ciudad:", cityVal, 55, 190);
   drawKV(doc, x0 + 260, y + 12, "Terreno:", safeText(equipment.terrain || "—"), 60, 190);
   drawKV(doc, x0 + 14, y + 28, "Actividad:", safeText(equipment.activity || "—"), 55, 190);
@@ -274,8 +271,7 @@ export async function generateQuotePdfBuffer(payload) {
     }
   });
 
-  // Columnas corregidas: TOTAL ancho para que NO se parta
-  // Total = 70px, IVA = 60, Transporte = 75, Equipo = 95, Precio/día = 75, Opción = 145  => 520
+  // Anchos para que NO se rompa Total
   const cols = [
     { label: "Opción", w: 145, align: "left" },
     { label: "Precio / día", w: 75, align: "right" },
@@ -284,9 +280,9 @@ export async function generateQuotePdfBuffer(payload) {
     { label: "IVA 16%", w: 60, align: "right" },
     { label: "Total", w: 70, align: "right" },
   ];
+  const tableW = cols.reduce((a, c) => a + c.w, 0); // 520
 
-  // Header
-  roundedBox(doc, x0, y, 520, 22, 10, "#0f172a", null);
+  roundedBox(doc, x0, y, tableW, 22, 10, "#0f172a", null);
   doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(8);
 
   let cx = x0;
@@ -296,7 +292,7 @@ export async function generateQuotePdfBuffer(payload) {
   }
   y += 28;
 
-  // Rows (máx 4 filas)
+  // Rows (max 4)
   const maxRows = Math.min(usableOptions.length, 4);
   const rowH = 24;
   const gap = 5;
@@ -306,14 +302,12 @@ export async function generateQuotePdfBuffer(payload) {
     const isRequested = requestedDays != null && Number(opt?.durationDays) === Number(requestedDays);
     const isBest = i === bestIdx;
 
-    if (isRequested) roundedBox(doc, x0, y, 520, rowH, 10, "#e0f2fe", null);
-    else if (i % 2 === 1) roundedBox(doc, x0, y, 520, rowH, 10, "#f8fafc", null);
+    if (isRequested) roundedBox(doc, x0, y, tableW, rowH, 10, "#e0f2fe", null);
+    else if (i % 2 === 1) roundedBox(doc, x0, y, tableW, rowH, 10, "#f8fafc", null);
 
     const label = pickLabelForOption(opt, requestedDays);
-
     const perDay = effectivePerDay(opt);
 
-    // Para evitar wrap: usamos formato corto en tabla (sin “MXN”)
     const cells = [
       label,
       perDay ? `$${moneyShortMx(perDay)}` : "—",
@@ -332,16 +326,26 @@ export async function generateQuotePdfBuffer(payload) {
       cx += c.w;
     }
 
-    // Badge mejor costo/día (sin romper tabla)
+    // ✅ Badge dinámico dentro de columna "Opción" sin invadir "Precio/día"
     if (isBest) {
       const badge = "★ Mejor costo / día";
       doc.font("Helvetica-Bold").fontSize(7.8);
-
       const padX = 7;
       const bw = doc.widthOfString(badge) + padX * 2;
       const bh = 13;
 
-      const bx = x0 + 108; // dentro de la columna "Opción" sin chocar texto
+      const col0X = x0;
+      const col0W = cols[0].w;
+
+      const labelW = doc.widthOfString(label);
+      const minX = col0X + 8;
+      const maxX = col0X + col0W - bw - 10;
+
+      // intentamos ponerlo después del label, pero clamp para que no toque la siguiente columna
+      let bx = minX + labelW + 10;
+      if (bx > maxX) bx = maxX;
+      if (bx < minX) bx = minX;
+
       const by = y + 5;
 
       roundedBox(doc, bx, by, bw, bh, 7, "#16a34a", null);
@@ -351,7 +355,7 @@ export async function generateQuotePdfBuffer(payload) {
     y += rowH + gap;
   }
 
-  // ===== Resumen (más compacto, 1 página) =====
+  // ===== Resumen (sin traslapes) =====
   const main = usableOptions?.[0] || null;
   y += 6;
 
@@ -367,24 +371,28 @@ export async function generateQuotePdfBuffer(payload) {
     width: 320,
   });
 
-  const rightX = x0 + contentW - 200;
+  // ✅ Dos columnas: label izquierda, valor derecha
+  const blockW = 210;
+  const blockX = x0 + contentW - blockW;
+  const labelW = 120;
+  const valueW = blockW - labelW;
+
   doc.font("Helvetica").fontSize(8.6).fillColor("#cbd5e1");
-  doc.text("Equipo (sin IVA)", rightX, y + 14, { width: 190, align: "right" });
-  doc.text("Transporte", rightX, y + 28, { width: 190, align: "right" });
-  doc.text("IVA 16%", rightX, y + 42, { width: 190, align: "right" });
+  doc.text("Equipo (sin IVA)", blockX, y + 14, { width: labelW, align: "left" });
+  doc.text("Transporte", blockX, y + 28, { width: labelW, align: "left" });
+  doc.text("IVA 16%", blockX, y + 42, { width: labelW, align: "left" });
 
   doc.font("Helvetica-Bold").fontSize(8.8).fillColor("#ffffff");
-  doc.text(mxn(main?.rentalBaseMx || 0), rightX, y + 14, { width: 190, align: "right" });
-  doc.text(mxn(main?.transportMx || 0), rightX, y + 28, { width: 190, align: "right" });
-  doc.text(mxn(main?.vatMx || 0), rightX, y + 42, { width: 190, align: "right" });
+  doc.text(mxn(main?.rentalBaseMx || 0), blockX + labelW, y + 14, { width: valueW, align: "right" });
+  doc.text(mxn(main?.transportMx || 0), blockX + labelW, y + 28, { width: valueW, align: "right" });
+  doc.text(mxn(main?.vatMx || 0), blockX + labelW, y + 42, { width: valueW, align: "right" });
 
-  // TOTAL grande (tech)
   doc.font("Helvetica-Bold").fontSize(15.5).fillColor("#ffffff");
-  doc.text(mxn(main?.totalMx || 0), rightX, y + 54, { width: 190, align: "right" });
+  doc.text(mxn(main?.totalMx || 0), blockX, y + 54, { width: blockW, align: "right" });
 
   y += sumH + 12;
 
-  // ===== Condiciones (caja pro y bullets bien envueltos) =====
+  // ===== Condiciones (fit dentro de caja) =====
   drawSectionTitle(doc, x0, y, "Condiciones");
   y += 12;
 
@@ -397,21 +405,30 @@ export async function generateQuotePdfBuffer(payload) {
           "Vigencia: 48 horas.",
         ];
 
-  // Caja gris clara
-  const termsBoxH = 92; // fijo para mantener 1 página
+  const termsBoxH = 92;
   roundedBox(doc, x0, y, contentW, termsBoxH, 14, "#f8fafc", "#e2e8f0");
 
-  const bottomY = drawBulletList(doc, x0 + 14, y + 12, contentW - 28, termsList, 5);
+  const innerTop = y + 12;
+  const innerBottom = y + termsBoxH - 12;
 
-  y += termsBoxH + 10;
+  drawBulletListFit(doc, x0 + 14, innerTop, contentW - 28, innerBottom, termsList);
 
-  // ===== Footer =====
+  y += termsBoxH + 8;
+
+  // ===== Footer (✅ dentro del margin para evitar página 2) =====
+  const footerLineY = pageH - doc.page.margins.bottom - 14; // seguro dentro
+  const footerTextY = footerLineY + 6; // también dentro (<= pageH - bottom)
+
   doc.save();
-  doc.moveTo(x0, pageH - 34).lineTo(x0 + contentW, pageH - 34).strokeColor("#e2e8f0").lineWidth(1).stroke();
+  doc.moveTo(x0, footerLineY)
+    .lineTo(x0 + contentW, footerLineY)
+    .strokeColor("#e2e8f0")
+    .lineWidth(1)
+    .stroke();
   doc.restore();
 
   doc.font("Helvetica").fontSize(8).fillColor("#64748b");
-  doc.text("Generado automáticamente por VEXIQO", x0, pageH - 26, { width: contentW, align: "center" });
+  doc.text("Generado automáticamente por VEXIQO", x0, footerTextY, { width: contentW, align: "center" });
 
   doc.end();
 
