@@ -1,143 +1,166 @@
-/**
- * src/quote_service.js (ESM)
- * Persiste Quote (DRAFT) + QuoteItem(s) y genera PDF buffer (Playwright).
- */
+// src/quote_service.js (ESM)
+// Persiste Quote (DRAFT) + QuoteItems y genera PDF buffer (Playwright / PDF generator actual)
 
-import { PrismaClient } from "@prisma/client";
-import { computeComparativeOptions } from "./pricing_engine_v2.js";
-import { generateQuotePdfBuffer } from "./pdf_quote.js";
+import { PrismaClient } from '@prisma/client'
+import { computeComparativeOptions } from './pricing_engine_v2.js'
+import { generateQuotePdfBuffer } from './pdf_quote.js'
 
-const prisma = new PrismaClient();
+const prisma = new PrismaClient()
 
 export async function createDraftQuoteWithPdf(input) {
   const {
     companyId,
     lead,
+    equipment,
     durationDays,
     transportZone,
     transportRoundTripMx,
-    equipment,
     meta,
-  } = input || {};
+  } = input || {}
 
-  if (!companyId) throw new Error("createDraftQuoteWithPdf: companyId is required");
-  if (!lead) throw new Error("createDraftQuoteWithPdf: lead is required");
+  if (!companyId) throw new Error('createDraftQuoteWithPdf: companyId is required')
+  if (!lead) throw new Error('createDraftQuoteWithPdf: lead is required')
 
-  const d = Number(durationDays);
+  const d = Number(durationDays)
   if (!Number.isFinite(d) || d <= 0) {
-    throw new Error(`createDraftQuoteWithPdf: durationDays invalid: ${durationDays}`);
+    throw new Error(`createDraftQuoteWithPdf: durationDays invalid ${durationDays}`)
   }
 
-  const equipmentModel = equipment?.equipmentModel || "45FT";
+  const equipmentModel = (equipment?.type || '45FT').toUpperCase()
 
-  // 1) Upsert Lead (Lead solo tiene phoneE164 + name)
-  const leadRecord = await upsertLead(companyId, lead);
-
-  // 2) Pricing options: [primary exact, ref 7, ref 30] (o fallback)
-  const { options } = computeComparativeOptions({
+  // 1) Pricing options (primary exact, ref 7, ref 30) (o fallback)
+  let { options } = computeComparativeOptions({
     durationDays: d,
     equipmentModel,
     transportRoundTripMx: Number(transportRoundTripMx || 0),
     vatRate: 0.16,
-  });
+  })
 
-  // 3) Quote number secuencial por company
-  const quoteNumber = await nextQuoteNumber(companyId);
+  // 2) Asegurar opciones comparativas: 1 día, 7 días, 30 días + solicitada
+  //    (sin duplicar lógica; solo reusamos computeComparativeOptions)
+  const existingByDays = new Set((options || []).map(o => o.durationDays))
+  const ensureDays = [1, 7, 30]
+  const extraOptions = []
 
-  // 4) Persist Quote + QuoteItems as DRAFT
-  const createdAtISO = new Date().toISOString();
+  for (const refDays of ensureDays) {
+    if (refDays === d) continue
+    if (existingByDays.has(refDays)) continue
+
+    const res = computeComparativeOptions({
+      durationDays: refDays,
+      equipmentModel,
+      transportRoundTripMx: Number(transportRoundTripMx || 0),
+      vatRate: 0.16,
+    })
+
+    if (res?.primary && !existingByDays.has(res.primary.durationDays)) {
+      extraOptions.push(res.primary)
+      existingByDays.add(res.primary.durationDays)
+    }
+  }
+
+  // Orden profesional: solicitado primero, luego 1 / 7 / 30
+  const primary = (options && options[0]) ? options[0] : null
+  const extraSorted = []
+  for (const refDays of ensureDays) {
+    const found = extraOptions.find(o => o.durationDays === refDays)
+    if (found) extraSorted.push(found)
+  }
+
+  const optionsFinal = []
+  if (primary) optionsFinal.push(primary)
+  for (const o of extraSorted) optionsFinal.push(o)
+
+  // 3) QuoteNumber secuencial por company
+  const quoteNumber = await nextQuoteNumber(companyId)
+  const createdAtISO = new Date().toISOString()
+
+  // 4) Persist Quote + QuoteItems (main option = duración solicitada)
+  const main = optionsFinal[0] || null
 
   const quote = await prisma.quote.create({
     data: {
       companyId,
-      leadId: leadRecord.id,
+      leadId: lead.id,
       quoteNumber,
-      status: "DRAFT",
-
+      status: 'DRAFT',
       transportZone: transportZone || null,
       transportRoundTripMx: Number(transportRoundTripMx || 0),
-
-      subtotalMx: options[0]?.subtotalMx ?? 0,
-      vatMx: options[0]?.vatMx ?? 0,
-      totalMx: options[0]?.totalMx ?? 0,
-
+      subtotalMx: main ? main.subtotalMx : 0,
+      vatMx: main ? main.vatMx : 0,
+      totalMx: main ? main.totalMx : 0,
       meta: meta || null,
-
       items: {
-        create: options.map((opt, idx) => ({
+        create: optionsFinal.map((opt, idx) => ({
           lineNo: idx + 1,
           description:
-            idx === 0
+            opt.durationDays === d
               ? `Renta solicitada (${opt.durationDays} días)`
-              : opt.durationDays === 7
-                ? "Referencia: Semana (7 días)"
-                : opt.durationDays === 30
-                  ? "Referencia: Mes (30 días)"
-                  : `Referencia: ${opt.durationDays} días`,
+              : `Referencia (${opt.durationDays} días)`,
           durationDays: opt.durationDays,
-          unitPriceMx: opt.rentalBaseMx,
+          unitPricePerDayMx: opt.durationDays > 0 ? (opt.rentalBaseMx / opt.durationDays) : 0,
           amountMx: opt.totalMx,
         })),
       },
     },
     include: { items: true },
-  });
+  })
 
-  // 5) Generate PDF buffer
-  const company = await prisma.company.findUnique({ where: { id: companyId } }).catch(() => null);
+  // 5) Generate PDF buffer (usa optionsFinal para tabla comparativa)
+  const company = await prisma.company.findUnique({ where: { id: companyId } }).catch(() => null)
 
   const { buffer: pdfBuffer, filename } = await generateQuotePdfBuffer({
-    company: company || {},
+    company: company || { name: null },
     lead: {
-      name: leadRecord.name || null,
-      phone: leadRecord.phoneE164 || null, // para mostrarlo en PDF como "WhatsApp"
-      email: null,
-      city: null,
+      name: lead.name || null,
+      phoneE164: lead.phoneE164 || lead.phoneE164 || null,
     },
     quote: {
       quoteNumber: quote.quoteNumber,
       createdAtISO,
-      transportZone: transportZone || "",
+      transportZone: quote.transportZone || '',
     },
     equipment: {
-      type: equipment?.type,
-      height_m: equipment?.height_m,
-      terrain: equipment?.terrain,
-      activity: equipment?.activity,
+      type: equipment?.type || null,
+      height_m: equipment?.height_m ?? null,
+      terrain: equipment?.terrain ?? null,
+      activity: equipment?.activity ?? null,
+      city: equipment?.city ?? null,
     },
-    options,
+    options: optionsFinal,
     requestedDays: d,
     terms: [
-      "Importe principal corresponde exactamente a la duración solicitada.",
-      "Precios sin IVA + IVA 16% por separado.",
-      "Transporte redondo según zona (si aplica).",
-      "Vigencia: 48 horas.",
+      'Importe principal corresponde exactamente a la duración solicitada.',
+      'Precios en IVA 16% por separado.',
+      'Transporte redondo según zona (si aplica).',
+      'Vigencia: 48 horas.',
     ],
-  });
+  })
 
   return {
     quoteId: quote.id,
     quoteNumber: quote.quoteNumber,
     pdfBuffer,
     filename,
-    options,
-  };
+    options: optionsFinal,
+  }
 }
 
 async function upsertLead(companyId, lead) {
-  const phoneE164 = lead.phoneE164 ? String(lead.phoneE164) : null;
-  if (!phoneE164) throw new Error("upsertLead: lead.phoneE164 is required (WhatsApp sender)");
+  const phoneE164 = String(lead.phoneE164 || lead.phone || '').trim()
+  if (!phoneE164) throw new Error('createDraftQuoteWithPdf: lead phoneE164 is required (whatsapp sender)')
 
-  const existing = await prisma.lead.findFirst({ where: { companyId, phoneE164 } });
+  const existing = await prisma.lead.findFirst({ where: { companyId, phoneE164 } })
 
   if (existing) {
-    // Lead schema solo permite actualizar name
-    return prisma.lead.update({
+    // Lead existe: solo si viene nombre, actualiza nombre
+    await prisma.lead.update({
       where: { id: existing.id },
       data: {
         name: lead.name || existing.name,
       },
-    });
+    })
+    return existing
   }
 
   return prisma.lead.create({
@@ -146,12 +169,12 @@ async function upsertLead(companyId, lead) {
       phoneE164,
       name: lead.name || null,
     },
-  });
+  })
 }
 
 async function nextQuoteNumber(companyId) {
-  const year = new Date().getFullYear();
-  const count = await prisma.quote.count({ where: { companyId } });
-  const seq = String(count + 1).padStart(6, "0");
-  return `Q-${year}-${seq}`;
+  const year = new Date().getFullYear()
+  const count = await prisma.quote.count({ where: { companyId } })
+  const seq = String(count + 1).padStart(4, '0')
+  return `Q-${year}-${seq}`
 }
