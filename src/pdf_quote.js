@@ -1,6 +1,6 @@
 /**
  * src/pdf_quote.js
- * PDF generator (NO browser, NO Playwright). Uses PDFKit.
+ * PDF generator (PDFKit)
  *
  * Exports:
  * - generateQuotePdfBuffer({ company, lead, quote, equipment, options, requestedDays, terms })
@@ -8,9 +8,17 @@
  */
 
 import PDFDocument from "pdfkit";
+import fs from "node:fs";
+import path from "node:path";
+
+function moneyShortMx(n) {
+  const v = Math.round(Number(n || 0));
+  // corto para tablas (evita wrap)
+  return v.toLocaleString("es-MX", { maximumFractionDigits: 0 });
+}
 
 function mxn(n) {
-  const v = Number(n || 0);
+  const v = Math.round(Number(n || 0));
   return v.toLocaleString("es-MX", {
     style: "currency",
     currency: "MXN",
@@ -25,113 +33,46 @@ function safeText(v) {
 function fmtDateEsMX(iso) {
   const d = iso ? new Date(iso) : new Date();
   if (Number.isNaN(d.getTime())) return "";
-  // “21 feb 2026” estilo enterprise
   return d.toLocaleDateString("es-MX", { year: "numeric", month: "short", day: "2-digit" });
 }
 
-function clamp(n, a, b) {
-  const x = Number(n);
-  if (!Number.isFinite(x)) return a;
-  return Math.max(a, Math.min(b, x));
-}
-
-/**
- * Simple table drawing helpers (enterprise-clean)
- */
 function drawSectionTitle(doc, x, y, title) {
-  doc
-    .font("Helvetica-Bold")
-    .fontSize(11)
-    .fillColor("#0f172a")
-    .text(title, x, y);
+  doc.font("Helvetica-Bold").fontSize(10.5).fillColor("#0f172a").text(title, x, y);
 }
 
-function drawKV(doc, x, y, label, value, labelW = 110, valueW = 210) {
-  doc
-    .font("Helvetica")
-    .fontSize(9)
-    .fillColor("#334155")
-    .text(label, x, y, { width: labelW });
-
+function drawKV(doc, x, y, label, value, labelW = 70, valueW = 210) {
+  doc.font("Helvetica").fontSize(8.8).fillColor("#334155").text(label, x, y, { width: labelW });
   doc
     .font("Helvetica-Bold")
-    .fontSize(9)
+    .fontSize(8.8)
     .fillColor("#0f172a")
     .text(value, x + labelW, y, { width: valueW });
 }
 
-function drawPill(doc, x, y, text) {
-  const padX = 8;
-  const padY = 4;
+function roundedBox(doc, x, y, w, h, r, fill, stroke) {
   doc.save();
-  doc.font("Helvetica-Bold").fontSize(8);
-
-  const w = doc.widthOfString(text) + padX * 2;
-  const h = 16;
-
-  doc.roundedRect(x, y, w, h, 8).fill("#0ea5e9");
-  doc.fillColor("#ffffff").text(text, x + padX, y + padY - 1, { width: w - padX * 2 });
-  doc.restore();
-
-  return { w, h };
-}
-
-function drawBadge(doc, x, y, text) {
-  const padX = 7;
-  const padY = 3;
-  doc.save();
-  doc.font("Helvetica-Bold").fontSize(8);
-
-  const w = doc.widthOfString(text) + padX * 2;
-  const h = 14;
-
-  doc.roundedRect(x, y, w, h, 7).fill("#16a34a");
-  doc.fillColor("#ffffff").text(text, x + padX, y + padY - 1, { width: w - padX * 2 });
-  doc.restore();
-
-  return { w, h };
-}
-
-function drawTableHeader(doc, x, y, cols) {
-  doc.save();
-  doc.roundedRect(x, y, 520, 24, 8).fill("#0f172a");
-  doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(8);
-
-  let cx = x;
-  for (const c of cols) {
-    doc.text(c.label, cx + 8, y + 7, { width: c.w - 16, align: c.align || "left" });
-    cx += c.w;
-  }
+  if (fill) doc.fillColor(fill);
+  if (stroke) doc.strokeColor(stroke).lineWidth(1);
+  doc.roundedRect(x, y, w, h, r);
+  if (fill && stroke) doc.fillAndStroke();
+  else if (fill) doc.fill();
+  else if (stroke) doc.stroke();
   doc.restore();
 }
 
-function drawTableRow(doc, x, y, cols, cells, opts = {}) {
-  const { zebra = false, highlight = false } = opts;
-
-  doc.save();
-
-  if (highlight) {
-    doc.roundedRect(x, y, 520, 26, 8).fill("#e0f2fe"); // light cyan highlight
-  } else if (zebra) {
-    doc.roundedRect(x, y, 520, 26, 8).fill("#f8fafc"); // subtle zebra
+function tryLoadPng(rel) {
+  try {
+    const p = path.join(process.cwd(), rel);
+    if (!fs.existsSync(p)) return null;
+    return p;
+  } catch {
+    return null;
   }
-
-  doc.fillColor("#0f172a").font("Helvetica").fontSize(9);
-
-  let cx = x;
-  for (let i = 0; i < cols.length; i++) {
-    const c = cols[i];
-    const t = safeText(cells[i] ?? "");
-    doc.text(t, cx + 8, y + 7, { width: c.w - 16, align: c.align || "left" });
-    cx += c.w;
-  }
-
-  doc.restore();
 }
 
 function pickLabelForOption(opt, requestedDays) {
   const d = Number(opt?.durationDays || 0);
-  if (requestedDays && d === Number(requestedDays)) return `Solicitado (${d} días)`;
+  if (requestedDays != null && d === Number(requestedDays)) return `Solicitado (${d} días)`;
   if (d === 1) return "1 día";
   if (d === 7) return "7 días";
   if (d === 30) return "30 días";
@@ -143,6 +84,25 @@ function effectivePerDay(opt) {
   if (!d) return 0;
   const base = Number(opt?.rentalBaseMx || 0);
   return Math.round(base / d);
+}
+
+function drawBulletList(doc, x, y, w, items, maxItems = 5) {
+  const list = Array.isArray(items) ? items.slice(0, maxItems) : [];
+  doc.font("Helvetica").fontSize(8.6).fillColor("#334155");
+
+  let cy = y;
+  for (const t of list) {
+    const text = safeText(t);
+    // bullet
+    doc.circle(x + 3, cy + 4, 1.4).fill("#334155");
+    doc.fillColor("#334155");
+
+    const textX = x + 12;
+    const h = doc.heightOfString(text, { width: w - 12, lineGap: 1.5 });
+    doc.text(text, textX, cy, { width: w - 12, lineGap: 1.5 });
+    cy += h + 6;
+  }
+  return cy;
 }
 
 export async function generateQuotePdfBuffer(payload) {
@@ -158,7 +118,7 @@ export async function generateQuotePdfBuffer(payload) {
 
   const doc = new PDFDocument({
     size: "A4",
-    margins: { top: 36, left: 36, right: 36, bottom: 36 },
+    margins: { top: 28, left: 32, right: 32, bottom: 28 },
     info: {
       Title: `Cotización ${safeText(quote.quoteNumber || "")}`,
       Author: safeText(company.name || "VEXIQO"),
@@ -173,112 +133,139 @@ export async function generateQuotePdfBuffer(payload) {
     doc.on("error", reject);
   });
 
-  // ===== Layout constants =====
   const pageW = doc.page.width;
-  const x0 = 36;
-  const contentW = pageW - 72;
+  const pageH = doc.page.height;
+  const x0 = doc.page.margins.left;
+  const contentW = pageW - doc.page.margins.left - doc.page.margins.right;
 
-  // ===== Header (enterprise bar) =====
+  // ===== Header (más compacto) =====
+  const headerH = 92;
   doc.save();
-  doc.rect(0, 0, pageW, 110).fill("#0b1220"); // deep navy
+  doc.rect(0, 0, pageW, headerH).fill("#0b1220");
   doc.restore();
 
-  // Company name
-  doc
-    .font("Helvetica-Bold")
-    .fontSize(16)
-    .fillColor("#ffffff")
-    .text(safeText(company.name || "TSC Industrial"), x0, 30, { width: contentW });
+  // Badge/logo container dentro del header (blanco) para que el logo con texto se vea premium
+  const logoFull = tryLoadPng("assets/tsc_logo_full.png");
+  const logoMark = tryLoadPng("assets/tsc_logo_mark.png");
 
-  // Small subtitle (clean, not noisy)
-  doc
-    .font("Helvetica")
-    .fontSize(9)
-    .fillColor("#cbd5e1")
-    .text("Cotización automática generada por VEXIQO", x0, 52, { width: contentW });
+  const logoBoxW = 190;
+  const logoBoxH = 52;
+  const logoBoxX = x0;
+  const logoBoxY = 20;
 
-  // Quote meta (right)
-  const folio = safeText(quote.quoteNumber || "");
-  const fecha = fmtDateEsMX(quote.createdAtISO || Date.now());
+  roundedBox(doc, logoBoxX, logoBoxY, logoBoxW, logoBoxH, 14, "#ffffff", null);
 
-  doc.font("Helvetica").fontSize(9).fillColor("#cbd5e1");
-  doc.text("Folio", x0, 30, { width: contentW, align: "right" });
-  doc.font("Helvetica-Bold").fontSize(11).fillColor("#ffffff");
-  doc.text(folio || "—", x0, 43, { width: contentW, align: "right" });
-
-  doc.font("Helvetica").fontSize(9).fillColor("#cbd5e1");
-  doc.text("Fecha", x0, 62, { width: contentW, align: "right" });
-  doc.font("Helvetica-Bold").fontSize(10).fillColor("#ffffff");
-  doc.text(fecha || "—", x0, 75, { width: contentW, align: "right" });
-
-  // Divider shadow under header
-  doc.save();
-  doc.rect(0, 110, pageW, 1).fill("#0f172a");
-  doc.restore();
-
-  // ===== Body starts =====
-  let y = 126;
-
-  // Pills row (optional)
-  if (quote.transportZone) {
-    const p = drawPill(doc, x0, y - 2, `Zona: ${safeText(quote.transportZone)}`);
-    // keep spacing consistent
+  if (logoFull) {
+    // logo con texto dentro del card blanco
+    doc.image(logoFull, logoBoxX + 14, logoBoxY + 12, { height: 28 });
+  } else {
+    // fallback sin imagen
+    doc.font("Helvetica-Bold").fontSize(14).fillColor("#0f172a").text(
+      safeText(company.name || "TSC Industrial"),
+      logoBoxX + 14,
+      logoBoxY + 18,
+      { width: logoBoxW - 28 }
+    );
   }
 
-  // ===== Client / Requirement cards =====
-  // Cards background
-  const cardH = 92;
+  // Subtítulo (tech, discreto)
+  doc.font("Helvetica").fontSize(8.5).fillColor("#cbd5e1");
+  doc.text("Cotización automática generada por VEXIQO", x0, 76, { width: contentW });
+
+  // Meta derecha (folio/fecha)
+  const folio = safeText(quote.quoteNumber || "—");
+  const fecha = fmtDateEsMX(quote.createdAtISO || Date.now());
+
+  doc.font("Helvetica").fontSize(8.5).fillColor("#cbd5e1");
+  doc.text("Folio", x0, 22, { width: contentW, align: "right" });
+  doc.font("Helvetica-Bold").fontSize(10.5).fillColor("#ffffff");
+  doc.text(folio, x0, 34, { width: contentW, align: "right" });
+
+  doc.font("Helvetica").fontSize(8.5).fillColor("#cbd5e1");
+  doc.text("Fecha", x0, 52, { width: contentW, align: "right" });
+  doc.font("Helvetica-Bold").fontSize(9.5).fillColor("#ffffff");
+  doc.text(fecha || "—", x0, 64, { width: contentW, align: "right" });
+
+  // Logo mark pequeño a la derecha (si existe) dentro de un badge blanco para que no se vea cuadrado feo
+  if (logoMark) {
+    const markW = 34;
+    const markBoxW = 44;
+    const markBoxH = 44;
+    const markBoxX = pageW - doc.page.margins.right - markBoxW;
+    const markBoxY = 20;
+
+    roundedBox(doc, markBoxX, markBoxY, markBoxW, markBoxH, 14, "#ffffff", null);
+    doc.image(logoMark, markBoxX + 6, markBoxY + 6, { width: markW });
+  }
+
+  // Divider
   doc.save();
-  doc.roundedRect(x0, y + 22, contentW, cardH, 14).fill("#f8fafc"); // slate-50
+  doc.rect(0, headerH, pageW, 1).fill("#0f172a");
   doc.restore();
 
-  drawSectionTitle(doc, x0 + 16, y + 34, "Cliente");
-  drawSectionTitle(doc, x0 + 320, y + 34, "Requerimiento");
+  let y = headerH + 12;
 
-  // Left column (Cliente)
-  drawKV(doc, x0 + 16, y + 54, "Nombre:", safeText(lead.name || "—"), 70, 210);
-  drawKV(doc, x0 + 16, y + 70, "WhatsApp:", safeText(lead.phone || lead.phoneE164 || "—"), 70, 210);
+  // ===== Zona pill (compacta) =====
+  if (quote.transportZone) {
+    const text = `Zona: ${safeText(quote.transportZone)}`;
+    doc.font("Helvetica-Bold").fontSize(8).fillColor("#ffffff");
 
-  // Right column (Requerimiento)
-  drawKV(doc, x0 + 320, y + 54, "Equipo:", safeText(equipment.type || "—"), 60, 170);
+    const padX = 10;
+    const pillW = doc.widthOfString(text) + padX * 2;
+    const pillH = 16;
+
+    roundedBox(doc, x0, y, pillW, pillH, 8, "#0ea5e9", null);
+    doc.text(text, x0 + padX, y + 4, { width: pillW - padX * 2 });
+    y += 20;
+  }
+
+  // ===== Cards Cliente / Requerimiento =====
+  const cardH = 78;
+  roundedBox(doc, x0, y, contentW, cardH, 14, "#f8fafc", null);
+
+  drawSectionTitle(doc, x0 + 14, y + 12, "Cliente");
+  drawSectionTitle(doc, x0 + 300, y + 12, "Requerimiento");
+
+  const leadName = safeText(lead.name || "—");
+  const wa = safeText(lead.phone || lead.phoneE164 || "—");
+
+  drawKV(doc, x0 + 14, y + 30, "Nombre:", leadName, 60, 210);
+  drawKV(doc, x0 + 14, y + 46, "WhatsApp:", wa, 60, 210);
+
+  drawKV(doc, x0 + 300, y + 30, "Equipo:", safeText(equipment.type || "—"), 55, 170);
 
   const heightTxt =
     equipment.height_m != null && safeText(equipment.height_m) !== ""
       ? `${safeText(equipment.height_m)} m`
       : "—";
 
-  drawKV(doc, x0 + 320, y + 70, "Altura:", heightTxt, 60, 170);
+  drawKV(doc, x0 + 300, y + 46, "Altura:", heightTxt, 55, 170);
 
-  // Second line row
-  y += 22 + cardH + 18;
+  y += cardH + 10;
 
-  // Small technical line (compact, pro)
-  doc.save();
-  doc.roundedRect(x0, y, contentW, 46, 14).fill("#ffffff");
-  doc.roundedRect(x0, y, contentW, 46, 14).strokeColor("#e2e8f0").lineWidth(1).stroke();
-  doc.restore();
+  // ===== Strip técnico (ciudad/terreno/actividad/duración) =====
+  const stripH = 42;
+  roundedBox(doc, x0, y, contentW, stripH, 14, "#ffffff", "#e2e8f0");
 
-  const techLeftX = x0 + 16;
-  const techY = y + 14;
-
-  drawKV(doc, techLeftX, techY, "Ciudad:", safeText(equipment.city || "—"), 55, 190);
-  drawKV(doc, techLeftX + 260, techY, "Terreno:", safeText(equipment.terrain || "—"), 60, 180);
-  drawKV(doc, techLeftX, techY + 16, "Actividad:", safeText(equipment.activity || "—"), 55, 190);
+  const cityVal = safeText(equipment.city || lead.city || "—");
+  drawKV(doc, x0 + 14, y + 12, "Ciudad:", cityVal, 55, 190);
+  drawKV(doc, x0 + 260, y + 12, "Terreno:", safeText(equipment.terrain || "—"), 60, 190);
+  drawKV(doc, x0 + 14, y + 28, "Actividad:", safeText(equipment.activity || "—"), 55, 190);
 
   const durTxt = requestedDays ? `${requestedDays} días` : "—";
-  drawKV(doc, techLeftX + 260, techY + 16, "Duración:", durTxt, 60, 180);
+  drawKV(doc, x0 + 260, y + 28, "Duración:", durTxt, 60, 190);
 
-  y += 64;
+  y += stripH + 14;
 
-  // ===== Pricing (Comparative) =====
+  // ===== Tabla comparativa =====
   drawSectionTitle(doc, x0, y, "Opciones de cotización");
-  y += 14;
+  y += 12;
 
-  // Determine best cost/day among the options we have
   const usableOptions = Array.isArray(options) ? options : [];
+
+  // best costo/día
   let bestIdx = -1;
   let bestPerDay = Infinity;
-
   usableOptions.forEach((opt, idx) => {
     const perDay = effectivePerDay(opt);
     if (perDay > 0 && perDay < bestPerDay) {
@@ -287,133 +274,144 @@ export async function generateQuotePdfBuffer(payload) {
     }
   });
 
-  // Table columns (pro, no noise)
+  // Columnas corregidas: TOTAL ancho para que NO se parta
+  // Total = 70px, IVA = 60, Transporte = 75, Equipo = 95, Precio/día = 75, Opción = 145  => 520
   const cols = [
-    { label: "Opción", w: 150, align: "left" },
-    { label: "Precio / día", w: 85, align: "right" },
-    { label: "Equipo (sin IVA)", w: 105, align: "right" },
-    { label: "Transporte", w: 80, align: "right" },
+    { label: "Opción", w: 145, align: "left" },
+    { label: "Precio / día", w: 75, align: "right" },
+    { label: "Equipo (sin IVA)", w: 95, align: "right" },
+    { label: "Transporte", w: 75, align: "right" },
     { label: "IVA 16%", w: 60, align: "right" },
-    { label: "Total", w: 40, align: "right" }, // we’ll use narrower + right align; values still readable
+    { label: "Total", w: 70, align: "right" },
   ];
 
-  // Because last col is narrow, we’ll render totals with shorter formatting if needed
-  // But we keep mxn; PDFKit will wrap if too long, so we ensure right alignment.
-  // If totals look tight, we’ll widen later; for now this fits 520 width:
-  // 150 + 85 + 105 + 80 + 60 + 40 = 520
+  // Header
+  roundedBox(doc, x0, y, 520, 22, 10, "#0f172a", null);
+  doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(8);
 
-  drawTableHeader(doc, x0, y, cols);
-  y += 30;
+  let cx = x0;
+  for (const c of cols) {
+    doc.text(c.label, cx + 8, y + 6, { width: c.w - 16, align: c.align || "left" });
+    cx += c.w;
+  }
+  y += 28;
 
-  // Keep maximum 4 rows (requested + 1/7/30) as we agreed.
-  // Quote service already ensures the set; PDF just respects what it receives.
-  const maxRows = clamp(usableOptions.length, 0, 4);
+  // Rows (máx 4 filas)
+  const maxRows = Math.min(usableOptions.length, 4);
+  const rowH = 24;
+  const gap = 5;
 
   for (let i = 0; i < maxRows; i++) {
     const opt = usableOptions[i];
     const isRequested = requestedDays != null && Number(opt?.durationDays) === Number(requestedDays);
     const isBest = i === bestIdx;
 
+    if (isRequested) roundedBox(doc, x0, y, 520, rowH, 10, "#e0f2fe", null);
+    else if (i % 2 === 1) roundedBox(doc, x0, y, 520, rowH, 10, "#f8fafc", null);
+
     const label = pickLabelForOption(opt, requestedDays);
+
     const perDay = effectivePerDay(opt);
 
+    // Para evitar wrap: usamos formato corto en tabla (sin “MXN”)
     const cells = [
       label,
-      perDay ? mxn(perDay) : "—",
-      mxn(opt?.rentalBaseMx || 0),
-      mxn(opt?.transportMx || 0),
-      mxn(opt?.vatMx || 0),
-      mxn(opt?.totalMx || 0),
+      perDay ? `$${moneyShortMx(perDay)}` : "—",
+      `$${moneyShortMx(opt?.rentalBaseMx || 0)}`,
+      `$${moneyShortMx(opt?.transportMx || 0)}`,
+      `$${moneyShortMx(opt?.vatMx || 0)}`,
+      `$${moneyShortMx(opt?.totalMx || 0)}`,
     ];
 
-    // Row
-    drawTableRow(doc, x0, y, cols, cells, {
-      zebra: i % 2 === 1,
-      highlight: isRequested,
-    });
+    doc.fillColor("#0f172a").font("Helvetica").fontSize(8.8);
 
-    // Badge “Mejor costo / día”
-    if (isBest) {
-      // place badge inside the row, at the end of the first column area
-      const badgeText = "★ Mejor costo / día";
-      const bx = x0 + 14;
-      const by = y + 6;
-      // If requested row is highlighted, badge still looks fine.
-      drawBadge(doc, bx + 115, by, badgeText);
+    cx = x0;
+    for (let k = 0; k < cols.length; k++) {
+      const c = cols[k];
+      doc.text(safeText(cells[k]), cx + 8, y + 6, { width: c.w - 16, align: c.align || "left" });
+      cx += c.w;
     }
 
-    y += 32;
+    // Badge mejor costo/día (sin romper tabla)
+    if (isBest) {
+      const badge = "★ Mejor costo / día";
+      doc.font("Helvetica-Bold").fontSize(7.8);
+
+      const padX = 7;
+      const bw = doc.widthOfString(badge) + padX * 2;
+      const bh = 13;
+
+      const bx = x0 + 108; // dentro de la columna "Opción" sin chocar texto
+      const by = y + 5;
+
+      roundedBox(doc, bx, by, bw, bh, 7, "#16a34a", null);
+      doc.fillColor("#ffffff").text(badge, bx + padX, by + 2, { width: bw - padX * 2 });
+    }
+
+    y += rowH + gap;
   }
 
-  // ===== Summary (requested option) =====
-  // Main option = first one (as per current system: option[0] is requested)
+  // ===== Resumen (más compacto, 1 página) =====
   const main = usableOptions?.[0] || null;
-
   y += 6;
 
-  doc.save();
-  doc.roundedRect(x0, y, contentW, 88, 16).fill("#0f172a");
-  doc.restore();
+  const sumH = 72;
+  roundedBox(doc, x0, y, contentW, sumH, 16, "#0f172a", null);
 
-  doc.font("Helvetica-Bold").fontSize(10).fillColor("#ffffff");
-  doc.text("Resumen (opción solicitada)", x0 + 18, y + 16);
+  doc.font("Helvetica-Bold").fontSize(9.8).fillColor("#ffffff");
+  doc.text("Resumen (opción solicitada)", x0 + 14, y + 12);
 
-  doc.font("Helvetica").fontSize(9).fillColor("#cbd5e1");
-  doc.text(`Equipo: ${safeText(equipment.type || "—")}`, x0 + 18, y + 34, { width: 340 });
-  doc.text(`Duración: ${requestedDays ? `${requestedDays} días` : "—"}`, x0 + 18, y + 48, {
-    width: 340,
+  doc.font("Helvetica").fontSize(8.8).fillColor("#cbd5e1");
+  doc.text(`Equipo: ${safeText(equipment.type || "—")}`, x0 + 14, y + 30, { width: 320 });
+  doc.text(`Duración: ${requestedDays ? `${requestedDays} días` : "—"}`, x0 + 14, y + 44, {
+    width: 320,
   });
 
-  // Right totals block
-  const rightX = x0 + 360;
+  const rightX = x0 + contentW - 200;
+  doc.font("Helvetica").fontSize(8.6).fillColor("#cbd5e1");
+  doc.text("Equipo (sin IVA)", rightX, y + 14, { width: 190, align: "right" });
+  doc.text("Transporte", rightX, y + 28, { width: 190, align: "right" });
+  doc.text("IVA 16%", rightX, y + 42, { width: 190, align: "right" });
 
-  doc.font("Helvetica").fontSize(9).fillColor("#cbd5e1");
-  doc.text("Equipo (sin IVA)", rightX, y + 18, { width: 160, align: "right" });
-  doc.text("Transporte", rightX, y + 34, { width: 160, align: "right" });
-  doc.text("IVA 16%", rightX, y + 50, { width: 160, align: "right" });
+  doc.font("Helvetica-Bold").fontSize(8.8).fillColor("#ffffff");
+  doc.text(mxn(main?.rentalBaseMx || 0), rightX, y + 14, { width: 190, align: "right" });
+  doc.text(mxn(main?.transportMx || 0), rightX, y + 28, { width: 190, align: "right" });
+  doc.text(mxn(main?.vatMx || 0), rightX, y + 42, { width: 190, align: "right" });
 
-  doc.font("Helvetica-Bold").fontSize(9).fillColor("#ffffff");
-  doc.text(mxn(main?.rentalBaseMx || 0), rightX, y + 18, { width: 160, align: "right" });
-  doc.text(mxn(main?.transportMx || 0), rightX, y + 34, { width: 160, align: "right" });
-  doc.text(mxn(main?.vatMx || 0), rightX, y + 50, { width: 160, align: "right" });
+  // TOTAL grande (tech)
+  doc.font("Helvetica-Bold").fontSize(15.5).fillColor("#ffffff");
+  doc.text(mxn(main?.totalMx || 0), rightX, y + 54, { width: 190, align: "right" });
 
-  // TOTAL big
-  doc.font("Helvetica-Bold").fontSize(16).fillColor("#ffffff");
-  doc.text(mxn(main?.totalMx || 0), rightX, y + 66, { width: 160, align: "right" });
+  y += sumH + 12;
 
-  y += 106;
-
-  // ===== Terms / Notes =====
+  // ===== Condiciones (caja pro y bullets bien envueltos) =====
   drawSectionTitle(doc, x0, y, "Condiciones");
-  y += 14;
+  y += 12;
 
-  const termLines = Array.isArray(terms) && terms.length
-    ? terms
-    : [
-        "Precios en MXN. IVA 16% por separado.",
-        "Transporte redondo según zona (si aplica).",
-        "Vigencia: 48 horas.",
-      ];
+  const termsList =
+    Array.isArray(terms) && terms.length
+      ? terms
+      : [
+          "Precios sin IVA. IVA 16% por separado.",
+          "Transporte redondo según zona (si aplica).",
+          "Vigencia: 48 horas.",
+        ];
 
-  doc.font("Helvetica").fontSize(9).fillColor("#334155");
+  // Caja gris clara
+  const termsBoxH = 92; // fijo para mantener 1 página
+  roundedBox(doc, x0, y, contentW, termsBoxH, 14, "#f8fafc", "#e2e8f0");
 
-  for (const t of termLines) {
-    doc.text(`• ${safeText(t)}`, x0, y, { width: contentW });
-    y += 14;
+  const bottomY = drawBulletList(doc, x0 + 14, y + 12, contentW - 28, termsList, 5);
 
-    if (y > 760) {
-      doc.addPage();
-      y = 50;
-    }
-  }
+  y += termsBoxH + 10;
 
   // ===== Footer =====
   doc.save();
-  doc.moveTo(x0, 805).lineTo(x0 + contentW, 805).strokeColor("#e2e8f0").lineWidth(1).stroke();
+  doc.moveTo(x0, pageH - 34).lineTo(x0 + contentW, pageH - 34).strokeColor("#e2e8f0").lineWidth(1).stroke();
   doc.restore();
 
   doc.font("Helvetica").fontSize(8).fillColor("#64748b");
-  doc.text("Generado automáticamente por VEXIQO", x0, 814, { width: contentW, align: "center" });
+  doc.text("Generado automáticamente por VEXIQO", x0, pageH - 26, { width: contentW, align: "center" });
 
   doc.end();
 
