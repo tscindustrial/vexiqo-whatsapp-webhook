@@ -18,6 +18,55 @@ function mxn(n) {
   });
 }
 
+// build one pricing option using the existing pricing engine (no duplicated logic)
+function computeSingleOption({ durationDays, equipmentModel, transportRoundTripMx, vatRate }) {
+  const res = computeComparativeOptions({
+    durationDays,
+    equipmentModel,
+    transportRoundTripMx,
+    vatRate,
+  });
+
+  // computeComparativeOptions returns { primary, options }
+  // We take primary because it represents the requested duration calculation.
+  return res?.primary || null;
+}
+
+function buildOrderedOptions({ requestedDays, equipmentModel, transportRoundTripMx, vatRate }) {
+  const req = computeSingleOption({
+    durationDays: requestedDays,
+    equipmentModel,
+    transportRoundTripMx,
+    vatRate,
+  });
+
+  const refDays = [1, 7, 30];
+  const refs = refDays
+    .filter((d) => d !== Number(requestedDays))
+    .map((d) =>
+      computeSingleOption({
+        durationDays: d,
+        equipmentModel,
+        transportRoundTripMx,
+        vatRate,
+      })
+    )
+    .filter(Boolean);
+
+  // Order: requested first, then 1/7/30 (excluding duplicates)
+  const all = [req, ...refs].filter(Boolean);
+
+  // Normalize into the option shape used downstream (pdf expects these keys)
+  return all.map((o) => ({
+    durationDays: Number(o.durationDays),
+    rentalBaseMx: Number(o.rentalBaseMx || 0),
+    transportMx: Number(o.transportMx || 0),
+    subtotalMx: Number(o.subtotalMx || 0),
+    vatMx: Number(o.vatMx || 0),
+    totalMx: Number(o.totalMx || 0),
+  }));
+}
+
 export async function createDraftQuoteWithPdf(input) {
   const {
     companyId,
@@ -39,18 +88,22 @@ export async function createDraftQuoteWithPdf(input) {
 
   const equipmentModel = equipment?.equipmentModel || "45FT";
 
-  // 1) Upsert lead (save side: phoneE164 + name)
+  // 1) Upsert lead
   const leadRecord = await upsertLead(companyId, lead);
 
-  // 2) Pricing options: [primary exact, ref 7, ref 30] (or fallback)
-  const { options } = computeComparativeOptions({
-    durationDays: d,
+  // 2) Build ordered options: requested + 1/7/30 (no duplicates)
+  const options = buildOrderedOptions({
+    requestedDays: d,
     equipmentModel,
     transportRoundTripMx: Number(transportRoundTripMx || 0),
     vatRate: 0.16,
   });
 
-  // 3) Quote number secuencial por company
+  if (!options.length) {
+    throw new Error("createDraftQuoteWithPdf: pricing options empty");
+  }
+
+  // 3) Quote number
   const quoteNumber = await nextQuoteNumber(companyId);
 
   // 4) Persist Quote + QuoteItems as DRAFT
@@ -69,27 +122,29 @@ export async function createDraftQuoteWithPdf(input) {
       totalMx: options[0]?.totalMx ?? 0,
       meta: meta || null,
       items: {
-create: options.map((opt, idx) => ({
-    lineNo: idx + 1,
-    description:
-      idx === 0
-        ? `Renta solicitada (${opt.durationDays} días)`
-        : opt.durationDays === 7
-        ? "Referencia: Semana (7 días)"
-        : opt.durationDays === 30
-        ? "Referencia: Mes (30 días)"
-        : `Referencia (${opt.durationDays} días)`,
+        create: options.map((opt, idx) => ({
+          lineNo: idx + 1,
+          description:
+            idx === 0
+              ? `Renta solicitada (${opt.durationDays} días)`
+              : opt.durationDays === 1
+              ? "Referencia: 1 día"
+              : opt.durationDays === 7
+              ? "Referencia: Semana (7 días)"
+              : opt.durationDays === 30
+              ? "Referencia: Mes (30 días)"
+              : `Referencia (${opt.durationDays} días)`,
 
-    durationDays: opt.durationDays,
+          durationDays: opt.durationDays,
 
-    // ✅ Prisma requiere unitPriceMx
-    // Guardamos precio unitario por día (coherente con el PDF comparativo)
-    unitPriceMx:
-      opt.durationDays && opt.durationDays > 0
-        ? Math.round(Number(opt.rentalBaseMx || 0) / Number(opt.durationDays))
-        : 0,
+          // Prisma requiere unitPriceMx.
+          // Guardamos precio unitario por día.
+          unitPriceMx:
+            opt.durationDays && opt.durationDays > 0
+              ? Math.round(Number(opt.rentalBaseMx || 0) / Number(opt.durationDays))
+              : 0,
 
-    amountMx: opt.totalMx,
+          amountMx: opt.totalMx,
         })),
       },
     },
@@ -97,53 +152,49 @@ create: options.map((opt, idx) => ({
   });
 
   // ===== Terms (con nota inteligente si conviene subir 1–2 días) =====
-  const terms = [
+  const termsBase = [
     "Importe principal corresponde exactamente a la duración solicitada.",
     "Precios sin IVA. IVA 16% por separado.",
     "Transporte redondo según zona (si aplica).",
     "Vigencia: 48 horas.",
   ];
 
-  // Nota de optimización: si d+1 o d+2 resulta más barato en total, sugerirlo como NOTA
-  // (sin alterar la cotización solicitada, y sin añadir filas extra en la tabla)
+  // Nota escalón: si d+1 o d+2 baja total
   const requestedTotal = Number(options?.[0]?.totalMx || 0);
+  let optimizedNote = null;
 
   if (requestedTotal > 0) {
     const candidates = [d + 1, d + 2];
-
-    let best = null; // { days, totalMx, savingsMx, savingsPct }
+    let best = null;
 
     for (const candDays of candidates) {
-      const res = computeComparativeOptions({
+      const cand = computeSingleOption({
         durationDays: candDays,
         equipmentModel,
         transportRoundTripMx: Number(transportRoundTripMx || 0),
         vatRate: 0.16,
       });
-
-      const candTotal = Number(res?.primary?.totalMx || 0);
+      const candTotal = Number(cand?.totalMx || 0);
       if (!candTotal) continue;
 
       if (candTotal < requestedTotal) {
         const savingsMx = requestedTotal - candTotal;
         const savingsPct = savingsMx / requestedTotal;
-
         if (!best || candTotal < best.totalMx) {
           best = { days: candDays, totalMx: candTotal, savingsMx, savingsPct };
         }
       }
     }
 
-    // Umbrales para evitar “ruido”: ahorro >= $800 o >= 3%
     if (best && (best.savingsMx >= 800 || best.savingsPct >= 0.03)) {
       const pct = Math.round(best.savingsPct * 100);
-      terms.unshift(
-        `Optimización de tarifa: por estructura escalonada, al extender a ${best.days} días el total baja aprox. ${mxn(
-          best.savingsMx
-        )} (${pct}%). Si te interesa, lo ajustamos.`
-      );
+      optimizedNote = `Optimización de tarifa: por estructura escalonada, al extender a ${best.days} días el total baja aprox. ${mxn(
+        best.savingsMx
+      )} (${pct}%). Si te interesa, lo ajustamos.`;
     }
   }
+
+  const terms = optimizedNote ? [optimizedNote, ...termsBase] : termsBase;
 
   // 5) Generate PDF buffer
   const company = await prisma.company.findUnique({ where: { id: companyId } }).catch(() => null);
@@ -152,7 +203,7 @@ create: options.map((opt, idx) => ({
     company: company || {},
     lead: {
       name: leadRecord.name || null,
-      phone: leadRecord.phoneE164 || null, // para mostrarlo en PDF como "WhatsApp"
+      phone: leadRecord.phoneE164 || null,
       email: null,
       city: null,
     },
@@ -189,7 +240,6 @@ async function upsertLead(companyId, lead) {
   const existing = await prisma.lead.findFirst({ where: { companyId, phoneE164 } });
 
   if (existing) {
-    // Lead existe: solo permite actualizar name
     return prisma.lead.update({
       where: { id: existing.id },
       data: {
