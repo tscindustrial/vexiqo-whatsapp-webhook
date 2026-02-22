@@ -167,6 +167,10 @@ function buildNextQuestion({ leadName, missing }) {
   if (next === "duration_days") {
     return "¿Cuántos días necesitas el equipo?";
   }
+  
+  if (next === "email") {
+    return "¿A qué correo te envío la cotización en PDF? (ej: compras@tuempresa.com)";
+  }
 
   return "Perfecto. ¿Me confirmas terreno, ciudad y duración?";
 }
@@ -242,6 +246,17 @@ app.post("/webhooks/whatsapp", async (req, res) => {
       await setLeadName(lead.id, extracted.name);
       lead.name = extracted.name;
     }
+    // ===== Guardar email extraído por IA =====
+    if (!lead.email && extracted?.email) {
+      const candidate = String(extracted.email || "").trim().toLowerCase();
+      const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(candidate);
+
+      if (isEmail) {
+        await setLeadEmail(lead.id, candidate);
+        lead.email = candidate;
+      }
+    }
+    
 
     if (extracted) {
       await patchQualificationFromExtract(lead.id, extracted);
@@ -258,6 +273,7 @@ app.post("/webhooks/whatsapp", async (req, res) => {
     if (!q || !q.terrain || String(q.terrain).trim() === "") missing.push("terrain");
     if (!q || !q.city || String(q.city).trim() === "") missing.push("city");
     if (!q || q.durationDays == null) missing.push("duration_days");
+    if (!lead.email) missing.push("email");
 
     // 6) Definir estado conversacional
     const nextState = missing.length > 0 ? "TECH_QUALIFICATION" : "READY_FOR_MATCH";
