@@ -7,6 +7,7 @@ import {
   getOrCreateConversation,
   saveMessage,
   setLeadName,
+  setLeadEmail,
   setConversationState,
   getOrCreateQualification,
   getQualification,
@@ -197,6 +198,17 @@ app.post("/webhooks/whatsapp", async (req, res) => {
     const company = await getOrCreateCompany(); // por ahora 1 empresa (TSC)
     const lead = await upsertLead(company.id, from);
     const convo = await getOrCreateConversation(company.id, lead.id);
+        // ===== CAPTURA AUTOMÁTICA DE EMAIL =====
+    if (!lead.email) {
+      const candidate = String(text || "").trim().toLowerCase();
+      const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(candidate);
+
+      if (isEmail) {
+        await setLeadEmail(lead.id, candidate);
+        lead.email = candidate;
+        console.log("Email capturado:", candidate);
+      }
+    }
 
     // Guarda inbound
     await saveMessage({
