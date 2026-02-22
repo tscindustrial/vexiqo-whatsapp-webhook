@@ -55,6 +55,8 @@ model Lead {
 
   conversations Conversation[]
 
+  email           String?
+  emailCapturedAt DateTime?
   @@unique([companyId, phoneE164])
   qualification Qualification?
   quotes Quote[]
