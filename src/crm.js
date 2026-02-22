@@ -54,6 +54,24 @@ export async function setLeadName(leadId, name) {
   });
 }
 
+export async function setLeadEmail(leadId, email) {
+  const clean = String(email || "").trim().toLowerCase();
+
+  // validación mínima: "algo@algo.algo"
+  const isValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean);
+  if (!isValid) return { ok: false, reason: "invalid_email" };
+
+  await prisma.lead.update({
+    where: { id: leadId },
+    data: {
+      email: clean,
+      emailCapturedAt: new Date(),
+    },
+  });
+
+  return { ok: true };
+}
+
 export async function setConversationState(conversationId, state) {
   return prisma.conversation.update({
     where: { id: conversationId },
