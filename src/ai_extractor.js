@@ -14,6 +14,8 @@ Devuelve SOLO JSON válido.
 Reglas:
 - No inventes datos. Si no está explícito, usa null.
 - Extrae nombre aunque venga dentro de una frase (ej: "me llamo Sergio").
+- Extrae email aunque venga dentro de texto (ej: "mi correo es compras@empresa.com")
+- Si no existe email explícito, usa null.
 - Normaliza:
   - height_m: número en metros (float) o null
   - type: "BRAZO" | "TIJERA" | null
@@ -30,6 +32,7 @@ Reglas:
     additionalProperties: false,
     properties: {
       name: { type: ["string", "null"] },
+      email: { type: ["string", "null"] },
       height_m: { type: ["number", "null"] },
       type: { type: ["string", "null"], enum: ["BRAZO", "TIJERA", null] },
       activity: { type: ["string", "null"], enum: ["PINTURA", "GENERAL", null] },
@@ -41,6 +44,7 @@ Reglas:
     },
     required: [
       "name",
+      "email",
       "height_m",
       "type",
       "activity",
