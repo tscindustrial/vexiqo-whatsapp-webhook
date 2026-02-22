@@ -132,7 +132,7 @@ async function sendWhatsAppDocument(to, pdfBuffer, filename, caption) {
   console.log("Document send:", msgResp.status, JSON.stringify(msgData));
 }
 
-function buildNextQuestion({ leadName, missing }) {
+function buildNextQuestion({ leadName, missing, invalidField, invalidEmailAttempt }) {
   if (!leadName) {
     return "Hola 👋 Soy VEXIQO de TSC Industrial. ¿Me compartes tu nombre para apoyarte mejor?";
   }
@@ -142,33 +142,41 @@ function buildNextQuestion({ leadName, missing }) {
   }
 
   const next = missing[0];
+  const isRetry = invalidField === next;
 
   // Orden técnico primero (como pediste)
   if (next === "height_m") {
+    if (isRetry) return `No alcancé a entender la altura 😅. Dímela así porfa: "14m" o "45ft".`;
     return `Gracias, ${leadName}. ¿Qué altura necesitas alcanzar? (ej: 14m o 45ft)`;
   }
 
   if (next === "type") {
+    if (isRetry) return "No me quedó claro el tipo 😅. Responde solo: BRAZO o TIJERA.";
     return "¿Necesitas brazo articulado o tijera?";
   }
 
   if (next === "activity") {
+    if (isRetry) return "No entendí la actividad 😅. Responde: PINTURA o GENERAL.";
     return "¿El trabajo es de pintura o uso general?";
   }
 
   if (next === "terrain") {
+    if (isRetry) return "No entendí el terreno 😅. Responde: PISO FIRME o TERRACERÍA.";
     return "¿El terreno es piso firme (concreto) o terracería?";
   }
 
   if (next === "city") {
+    if (isRetry) return "No entendí la ciudad 😅. Escríbela así: Saltillo / Ramos Arizpe / Arteaga / Derramadero / Apodaca / Santa Catarina.";
     return "¿En qué ciudad es el trabajo? (ej: Saltillo, Monterrey)";
   }
 
   if (next === "duration_days") {
+    if (isRetry) return "No entendí los días 😅. Pon solo un número: 1, 7, 30, etc.";
     return "¿Cuántos días necesitas el equipo?";
   }
-  
+
   if (next === "email") {
+    if (invalidEmailAttempt) return "Ese correo no se ve válido 😅. Escríbelo otra vez (ej: compras@tuempresa.com).";
     return "¿A qué correo te envío la cotización en PDF? (ej: compras@tuempresa.com)";
   }
 
@@ -198,21 +206,14 @@ app.post("/webhooks/whatsapp", async (req, res) => {
       return;
     }
 
+    // Flags de retry UX
+    let invalidEmailAttempt = false;
+    let invalidField = null;
+
     // 1) CRM base
     const company = await getOrCreateCompany(); // por ahora 1 empresa (TSC)
     const lead = await upsertLead(company.id, from);
     const convo = await getOrCreateConversation(company.id, lead.id);
-        // ===== CAPTURA AUTOMÁTICA DE EMAIL =====
-    if (!lead.email) {
-      const candidate = String(text || "").trim().toLowerCase();
-      const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(candidate);
-
-      if (isEmail) {
-        await setLeadEmail(lead.id, candidate);
-        lead.email = candidate;
-        console.log("Email capturado:", candidate);
-      }
-    }
 
     // Guarda inbound
     await saveMessage({
@@ -233,7 +234,8 @@ app.post("/webhooks/whatsapp", async (req, res) => {
       extracted = await extractLeadFields({
         text,
         known: {
-          name: lead.name || null
+          name: lead.name || null,
+          email: lead.email || null
         }
       });
       console.log("AI extracted:", extracted);
@@ -246,17 +248,18 @@ app.post("/webhooks/whatsapp", async (req, res) => {
       await setLeadName(lead.id, extracted.name);
       lead.name = extracted.name;
     }
-    // ===== Guardar email extraído por IA =====
+
+    // Guardar email extraído por IA (con validación mínima)
     if (!lead.email && extracted?.email) {
       const candidate = String(extracted.email || "").trim().toLowerCase();
       const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(candidate);
-
       if (isEmail) {
         await setLeadEmail(lead.id, candidate);
         lead.email = candidate;
+      } else {
+        invalidEmailAttempt = true;
       }
     }
-    
 
     if (extracted) {
       await patchQualificationFromExtract(lead.id, extracted);
@@ -275,10 +278,20 @@ app.post("/webhooks/whatsapp", async (req, res) => {
     if (!q || q.durationDays == null) missing.push("duration_days");
     if (!lead.email) missing.push("email");
 
+    // Detectar si el usuario intentó contestar el "siguiente" campo pero la IA no lo pudo extraer
+    // (solo aplica cuando extracted existe y todavía falta ese campo)
+    if (extracted?.missing?.length && missing.length > 0) {
+      const next = missing[0];
+      if (extracted.missing.includes(next) && String(text || "").trim().length > 0) {
+        // Esto dispara "retry prompt" para el campo que sigue
+        invalidField = next;
+      }
+    }
+
     // 6) Definir estado conversacional
     const nextState = missing.length > 0 ? "TECH_QUALIFICATION" : "READY_FOR_MATCH";
 
-    // ✅ 6.1) Si ya está todo, generamos cotización (1 paso, sin email todavía)
+    // ✅ 6.1) Si ya está todo, generamos cotización (1 paso, sin email SMTP todavía)
     if (nextState === "READY_FOR_MATCH") {
       // Evita generar varias veces si el usuario manda otro mensaje con todo completo
       const currentState = convo?.state || convo?.conversationState || null;
@@ -363,7 +376,9 @@ app.post("/webhooks/whatsapp", async (req, res) => {
 
     const reply = buildNextQuestion({
       leadName: lead.name,
-      missing
+      missing,
+      invalidField,
+      invalidEmailAttempt
     });
 
     // Guarda outbound
